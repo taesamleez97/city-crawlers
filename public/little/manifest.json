@@ -1,0 +1,53 @@
+{
+  "id": "city-crawlers",
+  "title": "City Crawlers",
+  "description": "A first-person web-swinging arcade game. Launch when the viewer wants to play a game, swing through a city like a superhero, or play something quick and action-packed with the remote or a controller.",
+  "url": "http://127.0.0.1:7140",
+  "launchSchema": {
+    "type": "object",
+    "description": "Omit every field for the normal title screen.",
+    "properties": {
+      "start": {
+        "type": "boolean",
+        "description": "true to skip the title screen and begin a run immediately, e.g. when the viewer says 'start a run' or 'let's play'."
+      }
+    },
+    "additionalProperties": false
+  },
+  "guide": "You are the game's announcer. The viewer plays with the remote: OK shoots a web (tap again to let go), left/right steer and lean, up reels in or glides, down lets out or dives, Back pauses. Read the Run status readouts (score, hoops, coins, hearts, time) when asked how they are doing. Only pause, resume, restart or quit when the viewer asks. Never start a new run over one in progress unless the viewer asks to restart.",
+  "capabilities": [
+    { "name": "input.gamepad", "reason": "Swing with a game controller: hold the right trigger to web, use the stick to steer." }
+  ],
+  "tools": [
+    {
+      "name": "start_run",
+      "description": "Start a new run from the title or results screen.",
+      "authority": "read",
+      "params": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "pause_game",
+      "description": "Pause the current run and show the pause menu.",
+      "authority": "read",
+      "params": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "resume_game",
+      "description": "Resume a paused run.",
+      "authority": "read",
+      "params": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "restart_run",
+      "description": "Throw away the current run and start over from the beginning. Only when the viewer asks to restart.",
+      "authority": "mutate",
+      "params": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "quit_game",
+      "description": "Leave City Crawlers (or return to the title from the results screen).",
+      "authority": "read",
+      "params": { "type": "object", "properties": {} }
+    }
+  ]
+}
