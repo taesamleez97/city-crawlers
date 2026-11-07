@@ -1,6 +1,6 @@
 import {
-  type Bone, DirectionalLight, Group, HemisphereLight, MathUtils, Mesh, MeshLambertMaterial, type Object3D,
-  PerspectiveCamera, Quaternion, Scene, Vector3,
+  type Bone, DirectionalLight, Group, HemisphereLight, type Interpolant, type KeyframeTrack, MathUtils, Mesh,
+  MeshLambertMaterial, type Object3D, PerspectiveCamera, Quaternion, Scene, Vector3,
 } from "three";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
@@ -9,7 +9,10 @@ import type { Subject } from "../game/subject";
 import { pal } from "../world/palette";
 
 type Side = "L" | "R";
-type PoseName = "relax" | "grip" | "open";
+type PoseName = "relax" | "grip" | "open" | "thwip";
+const POSES: PoseName[] = ["relax", "grip", "open", "thwip"];
+/** How long the web-shooter hand holds after a web fires, before it closes on the line. */
+const THWIP_HOLD = 0.28;
 const ARMS_FOV = 58;
 
 const v1 = new Vector3(), v2 = new Vector3(), v3 = new Vector3(), v4 = new Vector3(), v5 = new Vector3();
@@ -17,6 +20,12 @@ const q1 = new Quaternion(), q2 = new Quaternion(), q3 = new Quaternion();
 const X_AXIS = new Vector3(1, 0, 0);
 /** Shoulders sit a little ahead of and below the eye. */
 const ROOT_OFFSET = new Vector3(0, -0.02, -0.06);
+
+/** A track's first key, through its interpolant: cubic-spline keys store in-tangent, value, out-tangent. */
+function firstKey(track: KeyframeTrack) {
+  const interp = (track as KeyframeTrack & { createInterpolant(): Interpolant }).createInterpolant();
+  return new Quaternion().fromArray(interp.evaluate(track.times[0])).normalize();
+}
 
 class Arm {
   readonly sx: number;
@@ -27,10 +36,11 @@ class Arm {
   private readonly restFore: Quaternion;
   private readonly restHand: Quaternion;
   private readonly fingers: Bone[] = [];
-  private readonly poses: Record<PoseName, Quaternion[]> = { relax: [], grip: [], open: [] };
+  private readonly poses: Record<PoseName, Quaternion[]> = { relax: [], grip: [], open: [], thwip: [] };
   readonly target = new SpringVec3(260, 30);
   readonly grip = new SpringScalar(260, 30);
   readonly open = new SpringScalar(260, 30);
+  readonly thwip = new SpringScalar(320, 34);
   readonly wrist = new SpringScalar(200, 24);
 
   constructor(root: Object3D, gltf: GLTF, readonly side: Side) {
@@ -51,11 +61,13 @@ class Arm {
       if (o !== this.hand && (o as Bone).isBone) this.fingers.push(o as Bone);
     });
     // Clips are single-frame poses: sample them once into a pose library.
-    for (const pose of ["relax", "grip", "open"] as PoseName[]) {
-      const clip = gltf.animations.find((c) => c.name === `${pose}_${side}`);
+    for (const pose of POSES) {
+      const find = (p: PoseName) => gltf.animations.find((c) => c.name === `${p}_${side}`);
+      // Rigs without a web-shooter hand splay open instead.
+      const clip = find(pose) ?? (pose === "thwip" ? find("open") : undefined);
       this.poses[pose] = this.fingers.map((b) => {
         const track = clip?.tracks.find((t) => t.name === `${b.name}.quaternion`);
-        return track ? new Quaternion().fromArray(track.values, 0) : b.quaternion.clone();
+        return track ? firstKey(track) : b.quaternion.clone();
       });
     }
   }
@@ -97,9 +109,10 @@ class Arm {
   }
 
   applyPose() {
-    const g = clamp(this.grip.value, 0, 1), o = clamp(this.open.value, 0, 1);
+    const g = clamp(this.grip.value, 0, 1), o = clamp(this.open.value, 0, 1), t = clamp(this.thwip.value, 0, 1);
     this.fingers.forEach((b, i) => {
-      b.quaternion.copy(this.poses.relax[i]).slerp(this.poses.grip[i], g).slerp(this.poses.open[i], o);
+      b.quaternion.copy(this.poses.relax[i]).slerp(this.poses.grip[i], g).slerp(this.poses.open[i], o)
+        .slerp(this.poses.thwip[i], t);
     });
   }
 }
@@ -228,27 +241,28 @@ export class ArmsView {
     for (const side of ["L", "R"] as Side[]) {
       const arm = this.arms[side];
       let target = this.restTarget(arm, speed);
-      let grip = 0.15, open = 0, wrist = 0.1;
+      let grip = 0.15, open = 0, thwip = 0, wrist = 0.1;
       const isActive = this.activeSide === side && anchorCam;
       const isGesture = this.gestureSide === side;
       const body = this.body[side];
 
       if (body && !isActive) {
+        // A fist while loaded; the web-shooter hand forms as the real arm punches out.
         target = this.bodyTarget(body, arm.sx);
         const out = clamp((body.reach - 0.6) / 0.35, 0, 1);
         grip = 1 - out;
-        open = out * 0.6;
-        wrist = 0.1 + out * 0.3;
+        thwip = out;
+        wrist = 0.1 + out * 0.6;
       } else if (isActive) {
         target = this.reachTarget(anchorCam!, 0.6, arm.sx);
         grip = 1;
         wrist = -0.15;
-        if (this.gesture === "shoot" && this.gestureT < 0.14) {
-          // Thwip: wrist snaps back, fingers splay, arm punches out.
+        if (this.gesture === "shoot" && this.gestureT < THWIP_HOLD) {
+          // Thwip: arm punches out, wrist snaps back, middle and ring fingers hit the trigger.
           target = this.reachTarget(anchorCam!, 0.68, arm.sx);
           grip = 0;
-          open = 1;
-          wrist = 0.75;
+          thwip = 1;
+          wrist = 0.85;
         }
       } else if (this.activeSide && !isActive) {
         // Free arm counterbalances the swing: low and back.
@@ -279,6 +293,7 @@ export class ArmsView {
       arm.target.step(target, dt);
       arm.grip.step(grip, dt);
       arm.open.step(open, dt);
+      arm.thwip.step(thwip, dt);
       arm.wrist.step(wrist, dt);
       arm.applyPose();
       arm.solve(arm.target.value, v4.set(arm.sx * 0.8, -1, 0.35));

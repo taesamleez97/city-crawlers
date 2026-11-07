@@ -72,9 +72,11 @@ root > (shoulder) > upperarm_{L,R} > forearm_{L,R} > hand_{L,R} > any finger/pal
 
 - **Rest pose:** both arms straight forward (+Y in Blender), palms down, shoulders at
   (±0.18–0.20, −0.10, −0.30) m from the eye. The arm bone rolls point +Z.
-- **Clips:** `relax_{L,R}`, `grip_{L,R}`, `open_{L,R}`. These are single-frame hand
-  poses keying the hand's descendants. The game blends them: grip while holding a web,
-  open for the web-shoot "thwip", the release fling and crashes.
+- **Clips:** `relax_{L,R}`, `grip_{L,R}`, `open_{L,R}`, `thwip_{L,R}` (the web-shooter
+  hand: middle and ring curled, index, pinky and thumb out). These are single-frame hand
+  poses keying the hand's descendants. The game blends them: thwip as a web fires and as
+  the player's real arm punches out, grip while holding a web, open for the release fling
+  and crashes.
 - **The arm itself is procedural.** `src/view/arms.ts` runs two-bone IK toward the web
   anchor, adds wrist flicks, sway from acceleration and a speed bob. That keeps the arms
   responsive to steering instead of playing canned swings.

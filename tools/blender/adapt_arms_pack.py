@@ -5,7 +5,8 @@
 
 What it does, in order:
   1. Samples hand poses (relax / grip / open per side) from the pack's own clips,
-     with constraints evaluated, so artist-authored finger curls survive.
+     with constraints evaluated, so artist-authored finger curls survive, and
+     composes the web-shooter "thwip" hand from them.
   2. Strips constraints, control bones, widgets and props.
   3. Moves the rig into camera space (eye at the origin, +Y forward, right arm on +X,
      shoulders where build_arms.py puts them) and scales the upper arm to 0.30 m.
@@ -16,7 +17,7 @@ What it does, in order:
   6. Writes the pose clips and exports a GLB with vertex colors, no textures.
 
 Rig contract: upperarm_{L,R} > forearm_{L,R} > hand_{L,R} > (any finger bones);
-clips relax_{L,R}, grip_{L,R}, open_{L,R} key the hand's descendants.
+clips relax_{L,R}, grip_{L,R}, open_{L,R}, thwip_{L,R} key the hand's descendants.
 """
 
 import math
@@ -26,7 +27,7 @@ import sys
 
 import bmesh
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Quaternion, Vector
 
 sys.path.append(os.path.dirname(__file__))
 import cc_common as cc  # noqa: E402
@@ -47,6 +48,10 @@ PRESETS = {
         "drop": ("camera", "handIK", "elbowIK"),
         # pose -> (action name, frame rule). {s} is the side letter.
         "poses": {"relax": ("relax", "first"), "grip": ("grab.{s}", "max_curl"), "open": ("push.{s}", "min_curl")},
+        # Web-shooter hand, composed from the sampled poses: these (contract-named) bones take
+        # the grip curl, pushed a little further into the palm; the rest take the open pose.
+        "thwip_curled": ("middle_", "ring_", "palm_02_", "palm_03_"),
+        "thwip_boost": 1.25,
     },
 }
 P = PRESETS[args.preset]
@@ -153,6 +158,22 @@ poses = {}
 for pose_name, (action, rule) in P["poses"].items():
     for side in ("L", "R"):
         poses[(pose_name, side)] = sample_pose(action.format(s=side), side, rule)
+
+
+def curl_more(q, k):
+    axis, angle = q.to_axis_angle()
+    return Quaternion(axis, angle * k)
+
+
+for side in ("L", "R"):
+    thwip = {}
+    for src, q in poses[("open", side)].items():
+        name = contract_name(src)
+        if name.startswith(P["thwip_curled"]):
+            g = poses[("grip", side)][src]
+            q = g if name.startswith("palm_") else curl_more(g, P["thwip_boost"])
+        thwip[src] = q
+    poses[("thwip", side)] = thwip
 
 ad = arm.animation_data
 ad.action = None

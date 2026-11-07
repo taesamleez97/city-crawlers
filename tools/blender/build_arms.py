@@ -9,7 +9,7 @@ Rig contract (shared with any purchased arms pack, see src/view/armsRig.ts):
         > {thumb,index,middle,ring,pinky}_01_{L,R} > *_02_{L,R}
 Rest pose: both arms pointing straight forward from the shoulders (camera space),
 which keeps the in-engine two-bone IK trivial.
-Clips: relax_{L,R}, grip_{L,R}, open_{L,R} (finger poses; arm pose is procedural).
+Clips: relax_{L,R}, grip_{L,R}, open_{L,R}, thwip_{L,R} (finger poses; arm pose is procedural).
 """
 
 import math
@@ -190,6 +190,9 @@ POSES = {
              "thumb": (38, 48, -10)},
     "open": {"index": (-6, -2, 10), "middle": (-6, -2, 2), "ring": (-6, -2, -6), "pinky": (-6, -2, -13),
              "thumb": (-12, -4, 14)},
+    # Web-shooter: middle and ring pressed to the palm, index, pinky and thumb out.
+    "thwip": {"index": (-4, 0, 6), "middle": (92, 104, 0), "ring": (95, 104, 0), "pinky": (-4, 0, -14),
+              "thumb": (-14, -4, 20)},
 }
 
 pose_bones = arm_obj.pose.bones
