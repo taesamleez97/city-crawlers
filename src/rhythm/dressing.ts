@@ -118,7 +118,7 @@ export class Dressing {
     this.finishPop = 1;
   }
 
-  update(dt: number, camPos: Vector3) {
+  update(dt: number) {
     this.t += dt;
     for (const b of this.beams) {
       // Damped pendulum on 46 m of cable.
@@ -130,15 +130,17 @@ export class Dressing {
     const spin = this.t * 2.6;
     this.coins.forEach((c, i) => {
       let scale = 1.6;
+      let turn = spin + i * 0.4;
       this.p.copy(c.pos);
       if (c.taken) {
-        c.anim = Math.max(0, c.anim - dt * 3.5);
-        scale = c.anim > 0 ? 1.6 * (0.3 + c.anim * 0.7) : 0;
-        this.p.lerp(camPos, 1 - c.anim);
+        // Burst where it hangs; flying it at the camera fills the screen.
+        c.anim = Math.max(0, c.anim - dt * 6);
+        scale = 1.6 * c.anim;
+        turn += (1 - c.anim) * 8;
       } else {
         this.p.y += Math.sin(this.t * 2 + i) * 0.2;
       }
-      this.q.setFromAxisAngle(UP, spin + i * 0.4);
+      this.q.setFromAxisAngle(UP, turn);
       this.m.compose(this.p, this.q, this.s.setScalar(scale));
       this.coinMesh.setMatrixAt(i, this.m);
     });

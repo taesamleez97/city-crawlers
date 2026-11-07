@@ -6,6 +6,10 @@ import type { Subject } from "../game/subject";
 
 const EYE = new Vector3(0, 0.3, 0);
 
+/** Where the camera wants to pitch for a velocity (vertical, horizontal speed). The route replays this to place rings. */
+export const flightPitch = (vy: number, hs: number) =>
+  clamp(Math.atan2(vy, Math.max(6, hs)) * T.pitchFromVel + T.pitchBias, T.pitchMin, T.pitchMax);
+
 /**
  * First-person camera. Comfort rules for a big screen: yaw and pitch are smoothed
  * toward the direction of travel (never snapped), roll is small and only from
@@ -51,8 +55,7 @@ export class CameraRig {
 
     let targetPitch: number;
     if (s.state !== "perched") {
-      const velPitch = Math.atan2(s.vel.y, Math.max(6, hs));
-      targetPitch = clamp(velPitch * 0.45 - 0.08, -0.5, 0.22);
+      targetPitch = flightPitch(s.vel.y, hs);
     } else {
       targetPitch = -0.12 + Math.sin(this.t * 0.4) * 0.04 * this.idleSway;
     }

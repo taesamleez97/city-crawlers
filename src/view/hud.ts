@@ -3,7 +3,6 @@
 
 import { BodyGuide } from "./bodyGuide";
 import { LEFT_COLOR, LEAN_COLOR, RIGHT_COLOR, figureSvg, leanSvg, shootSvg } from "./cueStyle";
-import { Lanes } from "./lanes";
 
 export type MenuItem = { id: string; label: string; action: string; onSelect: () => void };
 export type Results = {
@@ -74,7 +73,6 @@ class Menu {
 
 export class Hud {
   readonly root: HTMLElement;
-  readonly lanes = new Lanes();
   /** In-game camera view (skeleton only: cheap enough to run beside the city). */
   readonly pip = new BodyGuide(400, 225, { compact: true });
   /** The big mirror for getting set up, with the live camera picture. */
@@ -134,7 +132,7 @@ export class Hud {
     this.debugEl = el("pre", "motion-debug hidden");
     this.menu = new Menu("Menu");
     this.root.append(
-      this.flashEl, this.lanes.root, this.top, this.pipSlot, this.callouts, this.center, this.prompt, this.hint, this.ready,
+      this.flashEl, this.top, this.pipSlot, this.callouts, this.center, this.prompt, this.hint, this.ready,
       this.overlay, this.debugEl, this.fadeEl, this.loading,
     );
     this.showRunHud(false);
@@ -151,8 +149,6 @@ export class Hud {
 
   showRunHud(on: boolean) {
     this.top.classList.toggle("hidden", !on);
-    this.lanes.show(on);
-    if (!on) this.lanes.clear();
   }
 
   showPip(on: boolean) {
@@ -308,8 +304,8 @@ function controlsCard() {
   const lean = (side: number) => `<i class="mini-cue lean" style="background:${LEAN_COLOR}">${leanSvg(side)}</i>`;
   return `<div class="controls moves">
     <div><i class="mini-fig">${figureSvg("stance")}</i><span><b>Fists up</b> by your shoulders</span></div>
-    <div>${shoot(-1, LEFT_COLOR)}${shoot(1, RIGHT_COLOR)}<span><b>Shoot a web:</b> punch that arm up and out, on the beat</span></div>
-    <div>${lean(-1)}${lean(1)}<span><b>Lean</b> your body to dodge</span></div>
+    <div>${shoot(-1, LEFT_COLOR)}${shoot(1, RIGHT_COLOR)}<span><b>Shoot a web</b> at each ring as its outer circle closes: punch that arm up and out</span></div>
+    <div>${lean(-1)}${lean(1)}<span><b>Lean</b> where the arrows point to dodge girders</span></div>
     <div><i class="mini-fig">${figureSvg("frame")}</i><span>Stand back so your <b>raised fists fit</b> in the camera picture</span></div>
   </div>`;
 }

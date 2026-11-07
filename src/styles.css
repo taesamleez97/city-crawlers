@@ -86,7 +86,6 @@ body {
 .ready h2,
 .final,
 .grade,
-.judge,
 .combo b,
 .prompt {
   font-family: "Bungee", "Fredoka", sans-serif;
@@ -151,215 +150,6 @@ body {
 }
 .combo.hot b {
   animation: throb 0.5s ease-in-out infinite alternate;
-}
-
-/* ---------------------------------------------------------------- cue lanes */
-.lanes {
-  position: absolute;
-  inset: 0;
-}
-.lane {
-  position: absolute;
-  top: 0;
-  width: 260px;
-  height: 1080px;
-}
-.lane.l {
-  left: calc(var(--little-safe-left) + 70px);
-}
-.lane.r {
-  right: calc(var(--little-safe-right) + 70px);
-}
-.lane-track {
-  position: absolute;
-  left: 50%;
-  top: 150px;
-  width: 168px;
-  height: 700px;
-  transform: translateX(-50%);
-  border-radius: 84px;
-  background: linear-gradient(rgba(29, 34, 68, 0), rgba(29, 34, 68, 0.38) 40%, rgba(29, 34, 68, 0.5));
-  overflow: hidden;
-}
-.beat-line {
-  position: absolute;
-  left: 18px;
-  right: 18px;
-  top: -150px;
-  height: 6px;
-  margin-top: -3px;
-  border-radius: 3px;
-  background: #fff;
-}
-.hit {
-  position: absolute;
-  left: 50%;
-  top: 800px;
-  width: 172px;
-  height: 172px;
-  border-radius: 50%;
-  border: 8px solid #fff;
-  box-shadow: 0 0 0 6px var(--ink), inset 0 0 0 6px var(--ink);
-  background: rgba(29, 34, 68, 0.35);
-  transform: translate(-50%, -50%);
-}
-.hit span {
-  position: absolute;
-  left: 50%;
-  top: 100%;
-  transform: translate(-50%, 18px);
-  font-family: "Bungee", sans-serif;
-  font-size: 30px;
-  text-shadow: 0 4px 0 var(--ink);
-}
-.lane.l .hit span {
-  color: var(--cue-left);
-}
-.lane.r .hit span {
-  color: var(--cue-right);
-}
-.hit.flash {
-  animation: hitflash 0.35s ease-out;
-}
-@keyframes hitflash {
-  from {
-    background: rgba(255, 255, 255, 0.85);
-  }
-  to {
-    background: rgba(29, 34, 68, 0.35);
-  }
-}
-.lane-cues {
-  position: absolute;
-  left: 50%;
-  top: 0;
-}
-.cue {
-  position: absolute;
-  left: 0;
-  top: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  will-change: transform;
-  transition: scale 120ms;
-}
-.cue.hand {
-  width: 140px;
-  height: 140px;
-  border-radius: 50%;
-  border: 8px solid #fff;
-  box-shadow: 0 0 0 6px var(--ink), 0 10px 0 6px var(--ink);
-}
-.lane.l .cue.hand {
-  background: var(--cue-left);
-}
-.lane.r .cue.hand {
-  background: var(--cue-right);
-}
-.cue.hand svg {
-  width: 76px;
-  height: 76px;
-  filter: drop-shadow(0 4px 0 rgba(29, 34, 68, 0.5));
-}
-.cue.lean {
-  width: 168px;
-  height: 116px;
-  flex-direction: column;
-  gap: 0;
-  border-radius: 30px;
-  background: var(--cue-lean);
-  border: 8px solid #fff;
-  box-shadow: 0 0 0 6px var(--ink), 0 10px 0 6px var(--ink);
-}
-.cue.lean svg {
-  width: 96px;
-  height: 64px;
-}
-.cue.lean b {
-  font-family: "Bungee", sans-serif;
-  font-weight: 400;
-  font-size: 22px;
-  line-height: 1;
-  margin-top: -6px;
-  text-shadow: 0 3px 0 rgba(29, 34, 68, 0.6);
-}
-.cue.soon {
-  scale: 1.12;
-}
-.cue.done {
-  animation: cuedone 0.38s ease-out forwards;
-}
-.cue.missed {
-  filter: grayscale(1) brightness(0.7);
-  animation: cuemiss 0.38s ease-in forwards;
-}
-@keyframes cuedone {
-  to {
-    scale: 1.7;
-    opacity: 0;
-  }
-}
-@keyframes cuemiss {
-  to {
-    opacity: 0;
-  }
-}
-
-.judge {
-  position: absolute;
-  top: 610px;
-  font-size: 54px;
-  white-space: nowrap;
-  text-align: center;
-  opacity: 0;
-  animation: judgepop 0.7s cubic-bezier(0.2, 1.4, 0.4, 1) forwards;
-}
-.lane.l .judge {
-  left: 230px;
-}
-.lane.r .judge {
-  right: 230px;
-}
-.judge small {
-  display: block;
-  font-size: 26px;
-  -webkit-text-stroke-width: 7px;
-  text-shadow: 0 4px 0 var(--ink);
-  color: #fff;
-}
-.judge.perfect {
-  color: var(--gold);
-  font-size: 66px;
-}
-.judge.great {
-  color: #9be7ff;
-}
-.judge.good {
-  color: var(--mint);
-}
-.judge.miss {
-  color: #b9bdd0;
-}
-@keyframes judgepop {
-  0% {
-    transform: scale(0.5);
-    opacity: 0;
-  }
-  20% {
-    transform: scale(1.1);
-    opacity: 1;
-  }
-  35% {
-    transform: scale(1);
-  }
-  75% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(-24px);
-  }
 }
 
 /* ---------------------------------------------------------------- camera mirror */
@@ -653,6 +443,12 @@ body {
 }
 .hint b.co {
   color: var(--cue-lean);
+}
+.hint b.cl {
+  color: var(--cue-left);
+}
+.hint b.cr {
+  color: var(--cue-right);
 }
 .hint {
   position: absolute;

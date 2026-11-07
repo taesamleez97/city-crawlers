@@ -14,8 +14,6 @@ export const LEAP_BEAT = 6;
 export const FINISH_BEAT = 120;
 /** Results appear once the outro has had a moment. */
 export const RESULTS_BEAT = 125;
-/** How far ahead (in beats) a cue appears in its lane. */
-export const LEAD_BEATS = 3;
 
 export type Side = -1 | 1;
 export type CueKind = "hand" | "lean";

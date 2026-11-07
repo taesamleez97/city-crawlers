@@ -17,10 +17,10 @@ import { BEAM_DELAY, DODGE_OFFSET, Route, newSample } from "../rhythm/route";
 import { BEAT, type CueKind, FINISH_BEAT, LEAP_BEAT, RESULTS_BEAT, type Side, sectionAt } from "../rhythm/song";
 import { ArmsView, type BodyArm } from "../view/arms";
 import { CameraRig } from "../view/cameraRig";
-import { CueMarkers } from "../view/cueMarkers";
-import { figureSvg } from "../view/cueStyle";
+import { LEFT_COLOR, RIGHT_COLOR, figureSvg } from "../view/cueStyle";
 import { Particles, SpeedLines, WebLine } from "../view/fx";
 import { type Hud, type MenuItem } from "../view/hud";
+import { WorldCues } from "../view/worldCues";
 import { type CityData, buildCity } from "../world/city";
 import { createWorldMaterial } from "../world/materials";
 import { pal } from "../world/palette";
@@ -38,8 +38,10 @@ const RESUME_GRACE = 0.75;
 /** Auto-pause when the player has been out of the camera's view this long (seconds). */
 const LOST_PAUSE_AFTER = 1.0;
 const RECOVERY_DELAY = 0.3;
-/** How many beats ahead a web cue starts lighting its target in the camera view. */
-const FOCUS_BEATS = 2;
+/** The camera view only comes up in play when framing needs fixing (seconds off before it shows, fine before it goes). */
+const PIP_SHOW_AFTER = 0.25;
+const PIP_HIDE_AFTER = 1.5;
+const NO_FOCUS: [number, number] = [0, 0];
 
 type StepId = "frame" | "stance" | "shootR" | "shootL" | "leanL" | "leanR";
 type Step = { id: StepId; label: string; hint: string; done: boolean };
@@ -82,7 +84,7 @@ export class Game {
   private readonly city: CityData;
   private readonly route: Route;
   private readonly dressing: Dressing;
-  private readonly markers: CueMarkers;
+  private readonly cues: WorldCues;
   private readonly traffic: Traffic;
   private readonly chunks: Mesh[] = [];
   private readonly input = new Input();
@@ -121,12 +123,14 @@ export class Game {
   private graceUntil = -Infinity;
   private finished = false;
   private countShown = 99;
-  private sectionShown = "";
   private coins = 0;
   private lostFor = 0;
   private foundFor = 0;
   private pausedForTracking = false;
   private resumeCount = 0;
+  /** Seconds framing has needed help (+) or been fine (-), for the camera view. */
+  private pipT = 0;
+  private pipShown = false;
   private readonly prevPos = new Vector3();
   private readonly tmp = new Vector3();
 
@@ -182,9 +186,9 @@ export class Game {
     this.route.beams.forEach((b, i) => this.beamOfCue.set(b.cue.id, i));
     this.judge = new Judge(this.route.cues);
     this.dressing = new Dressing(lib, material, this.route);
-    this.markers = new CueMarkers(this.route);
+    this.cues = new WorldCues(this.route);
     this.traffic = new Traffic(lib, material, this.city.lanes);
-    this.scene.add(this.dressing.group, this.markers.group, this.traffic.group, this.webLine.mesh, this.particles.mesh);
+    this.scene.add(this.dressing.group, this.cues.group, this.traffic.group, this.webLine.mesh, this.particles.mesh);
 
     this.sun.castShadow = true;
     this.sun.shadow.camera.near = 1;
@@ -211,7 +215,9 @@ export class Game {
     this.wirePlatform();
     this.toTitle();
     // Compile shaders before the first visible frame to avoid a hitch on the leap.
+    this.cues.prewarm(true);
     this.renderer.compile(this.scene, this.camera);
+    this.cues.prewarm(false);
     if (this.autoplay) this.startRun();
   }
 
@@ -268,7 +274,6 @@ export class Game {
     this.rig.snap(this.rider);
     this.rig.idleSway = 0.35;
     this.hud.showRunHud(false);
-    this.hud.showPip(false);
     this.hud.hideGuide();
     this.hud.setHint(null);
     this.hud.setPrompt(null);
@@ -289,7 +294,7 @@ export class Game {
   private resetRun() {
     this.judge.reset();
     this.dressing.reset();
-    this.markers.reset();
+    this.cues.reset();
     this.r = 0;
     this.rate = 1;
     this.lastBeat = 0;
@@ -305,12 +310,17 @@ export class Game {
     this.graceUntil = -Infinity;
     this.finished = false;
     this.countShown = 99;
-    this.sectionShown = "";
     this.coins = 0;
     this.lostFor = 0;
     this.pausedForTracking = false;
     this.webLine.hide();
-    this.hud.lanes.clear();
+    this.setPip(false);
+  }
+
+  private setPip(on: boolean) {
+    this.pipShown = on;
+    this.pipT = 0;
+    this.hud.showPip(on);
   }
 
   /** Play → get ready: the camera mirror, finding your spot and a quick move tutorial, then the song. */
@@ -441,19 +451,6 @@ export class Game {
     return [0, 0];
   }
 
-  /** In play: each side's target lights up as its next web cue approaches. */
-  private cueFocus(beat: number): [number, number] {
-    const out: [number, number] = [0, 0];
-    for (const rt of this.judge.rts) {
-      if (rt.cue.beat > beat + FOCUS_BEATS) break;
-      if (rt.state !== "pending" || rt.cue.kind !== "hand") continue;
-      const k = rt.cue.side < 0 ? 0 : 1;
-      const ahead = rt.cue.beat - beat;
-      if (out[k] === 0) out[k] = clamp(1 - ahead / FOCUS_BEATS, 0, 1);
-    }
-    return out;
-  }
-
   private beginPlay() {
     if (this.mode !== "auto") {
       if (this.motion.tracking) this.mode = "motion";
@@ -467,11 +464,10 @@ export class Game {
     this.state = "play";
     this.stateT = 0;
     this.hud.showRunHud(true);
-    this.hud.showPip(this.mode === "motion");
     this.hud.setStats(0, 0, 1, 1);
     this.hud.setHint(
       this.mode === "motion"
-        ? `<span><b>Fists up</b></span><span>Punch <b>up and out</b> as each circle lands</span><span>Lean with the <b class="co">arrows</b></span>`
+        ? `<span>Punch at each ring <b>as its outer circle closes</b></span><span><b class="cl">Blue</b> left arm, <b class="cr">pink</b> right</span><span>Lean where the <b class="co">arrows</b> point</span>`
         : this.mode === "keys"
           ? `<span><kbd>Q</kbd><kbd>E</kbd>webs</span><span><kbd>A</kbd><kbd>D</kbd>leans</span>`
           : null,
@@ -507,7 +503,7 @@ export class Game {
   /** Lost the player: show them the mirror until they are back in their spot. */
   private showLostGuide() {
     this.hud.close();
-    this.hud.showPip(false);
+    this.setPip(false);
     this.openCamera();
     this.hud.showGuide({
       title: "STEP BACK INTO VIEW",
@@ -524,7 +520,6 @@ export class Game {
     this.sfx.unlock();
     this.hud.close();
     this.hud.hideGuide();
-    this.hud.showPip(this.mode === "motion");
     this.closeCamera();
     this.hud.setPrompt(null);
     this.pausedForTracking = false;
@@ -601,7 +596,7 @@ export class Game {
       this.little.saveState({ best: final });
     }
     this.hud.showRunHud(false);
-    this.hud.showPip(false);
+    this.setPip(false);
     this.hud.setHint(null);
     this.hud.setPrompt(null);
     this.motion.close();
@@ -712,19 +707,21 @@ export class Game {
   // ------------------------------------------------------------------ judgments
   private onJudged(j: Judgment) {
     const cue = j.rt.cue;
-    this.hud.lanes.judge(cue.side, j.grade, j.offset);
+    this.cues.judged(j);
     if (j.grade !== "miss" && j.multiplier > 1 && j.combo === (j.multiplier - 1) * 8) this.hud.callout(`x${j.multiplier} COMBO!`, "good");
     if (cue.kind === "hand") {
       const swing = this.swingOfCue.get(cue.id)!;
-      if (j.grade === "miss") this.missHand(swing);
-      else {
+      if (j.grade === "miss") {
+        this.missHand(swing);
+        this.sfx.fizzle();
+      } else {
         this.fireWeb(swing, false);
-        this.markers.pop(cue.id);
         this.sfx.thwip();
         this.sfx.attach();
         this.rig.addKick(j.grade === "perfect" ? 0.8 : 0.5);
         const w = this.route.swings[swing];
-        this.particles.burst(w.anchor, j.grade === "perfect" ? 14 : 8, [pal("web"), cue.side < 0 ? new Color(0x33b4ff) : new Color(0xff5aa8)], { speed: 6, size: 0.35, gravity: 4, up: 0 });
+        const color = new Color(cue.side < 0 ? LEFT_COLOR : RIGHT_COLOR);
+        this.particles.burst(w.anchor, j.grade === "perfect" ? 22 : 12, [pal("web"), color], { speed: 9, size: 0.5, gravity: 4, up: 0 });
       }
     } else if (j.grade !== "miss") {
       this.assist = { side: cue.side, until: cue.beat + BEAM_DELAY + 0.8 };
@@ -763,7 +760,7 @@ export class Game {
     this.sfx.bonk();
     this.rig.addTrauma(0.55);
     this.hud.flash("rgba(255,60,80,0.9)", 0.5);
-    this.hud.callout("OUCH!", "bad");
+    this.cues.say("OUCH!", "bad", this.aheadOfRider(9, 0), { px: 120 });
     this.slowLeft = TUNING.slowBeats;
     this.sag.velocity -= 9;
     this.particles.burst(this.tmp.copy(b.pos).setY(b.pos.y + 0.3), 12, [pal("hazard"), pal("hazard_dark"), pal("warning_red")], { speed: 7, size: 0.3 });
@@ -776,8 +773,13 @@ export class Game {
     this.judge.score += pts;
     this.coins += got.length;
     this.sfx.coin(this.judge.combo);
-    this.hud.callout(`DODGE +${pts}`, "score");
+    this.cues.say(`+${pts}`, "score", this.aheadOfRider(10, -1.2), { px: 64 });
     for (const p of got) this.particles.burst(p, 5, [pal("coin"), pal("coin_rim")], { speed: 4, size: 0.22, gravity: 4, up: 1 });
+  }
+
+  /** A point in front of the hero for callouts about what just happened to them. */
+  private aheadOfRider(dist: number, lift: number) {
+    return this.tmp.copy(this.rider.pos).addScaledVector(this.rider.heading, dist).setY(this.rider.pos.y + 0.3 + lift);
   }
 
   // ------------------------------------------------------------------ loop
@@ -805,7 +807,7 @@ export class Game {
     const simDt = frozen ? 0 : dt;
     if (!frozen) {
       this.traffic.update(dt);
-      this.dressing.update(dt, this.camera.position);
+      this.dressing.update(dt);
       this.particles.update(dt);
     }
     this.rig.update(simDt, this.rider);
@@ -818,16 +820,24 @@ export class Game {
     if (this.web) this.webLine.update(dt, this.arms.webOrigin(this.camera, this.tmp), this.rider.anchor, this.camera);
 
     const beat = this.conductor.beat(now);
-    if (this.state === "play" || frozen) {
-      this.hud.lanes.update(beat, this.judge.rts, now);
-      this.markers.update(dt, beat, this.judge.rts, this.camera);
-    }
+    if (this.state === "play" || frozen) this.cues.update(simDt, beat, this.judge.rts, this.camera, this.web?.swing ?? -1);
     if (this.hud.guideOpen) this.hud.mirror.draw(this.motion, this.readyFocus(), now);
-    if (this.mode === "motion" && (this.state === "play" || frozen)) this.hud.pip.draw(this.motion, this.cueFocus(beat), now);
+    if (this.mode === "motion" && (this.state === "play" || this.state === "resuming")) this.updatePip(dt, now);
     if (this.debug) this.updateDebug(dt, beat);
 
     this.render();
     if (import.meta.env.DEV) this.logPerf(rawDt, performance.now() - now);
+  }
+
+  /** The city is the screen; the camera view only comes up while the player's framing needs fixing. */
+  private updatePip(dt: number, now: number) {
+    this.pipT = this.motion.framed ? Math.min(0, this.pipT) - dt : Math.max(0, this.pipT) + dt;
+    const show = this.pipShown ? this.pipT > -PIP_HIDE_AFTER : this.pipT > PIP_SHOW_AFTER;
+    if (show !== this.pipShown) {
+      this.pipShown = show;
+      this.hud.showPip(show);
+    }
+    if (show) this.hud.pip.draw(this.motion, NO_FOCUS, now);
   }
 
   /** The 3D arms copy the player's while the camera can see them. */
@@ -892,7 +902,7 @@ export class Game {
       if ((this.web?.swing ?? -1) < swing) {
         this.fireWeb(swing, true);
         this.sfx.recover();
-        this.hud.callout("RECOVER", "info");
+        this.cues.say("RECOVER", "info", this.route.swings[swing].anchor, { px: 64 });
       }
       this.sagTarget = 0;
     }
@@ -929,10 +939,6 @@ export class Game {
     }
 
     const sec = sectionAt(beat);
-    if (beat >= FIRST_CUE_BEAT && sec.name !== this.sectionShown) {
-      this.sectionShown = sec.name;
-      this.hud.callout(sec.name.toUpperCase(), "info");
-    }
     if (beat > FIRST_CUE_BEAT + 8) this.hud.setHint(null);
     this.hud.setProgress((beat - FIRST_CUE_BEAT) / (FINISH_BEAT - FIRST_CUE_BEAT), sec.name);
     this.hud.setStats(this.judge.score, this.judge.combo, this.judge.multiplier, this.judge.accuracy);
@@ -952,7 +958,14 @@ export class Game {
   }
 
   private updateCountIn(beat: number) {
-    if (beat >= FIRST_CUE_BEAT) return;
+    if (beat >= FIRST_CUE_BEAT) {
+      // Off the screen before the first ring lands.
+      if (this.countShown !== -1) {
+        this.countShown = -1;
+        this.hud.setCenter(null);
+      }
+      return;
+    }
     const n = beat < 4 ? 99 : 7 - Math.floor(beat);
     if (n === this.countShown) return;
     this.countShown = n;

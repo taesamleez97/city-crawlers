@@ -9,6 +9,11 @@ export const TUNING = {
   fovSpeedHi: 27,
   yawFollow: 5,
   pitchFollow: 3.5,
+  /** Pitch tips this much toward the flight path, plus a bias, within limits: calm enough that the rings stay in view through a dive. */
+  pitchFromVel: 0.22,
+  pitchBias: -0.06,
+  pitchMin: -0.26,
+  pitchMax: 0.2,
   rollMax: 0.15,
 
   // Rails

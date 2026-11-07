@@ -5,13 +5,20 @@
 // the hero falls behind for a moment and catches up, but the path itself never
 // changes. Swing tops land on the beats (that's when the next web fires), the
 // bottoms fall in between, and every swing leans toward its web's anchor.
+//
+// A web's anchor is the ring the player shoots at. It is placed by looking out
+// from the hero at the moment of the cue: up and out to the cue's side, where a
+// fist lands at full stretch, so every left ring shows in the same spot on screen
+// (upper left) and every right ring in its mirror.
 
 import { Vector3 } from "three";
 
-import { clamp, smoothstep } from "../core/math";
+import { TUNING } from "../config";
+import { clamp, damp, dampAngle, smoothstep } from "../core/math";
+import { flightPitch } from "../view/cameraRig";
 import { BANNERS, FINISH, ROUTE, SKYBRIDGES, START } from "../world/cityLayout";
 import type { CollisionWorld } from "../world/collision";
-import { type Cue, FINISH_BEAT, LEAP_BEAT, RESULTS_BEAT, type Side, buildChart, sectionAt } from "./song";
+import { BEAT, type Cue, FINISH_BEAT, LEAP_BEAT, RESULTS_BEAT, type Side, buildChart, sectionAt } from "./song";
 
 const UP = new Vector3(0, 1, 0);
 const CORNER_RADIUS = 34;
@@ -28,6 +35,19 @@ export const BEAM_DELAY = 0.5;
 export const DODGE_OFFSET = 5.5;
 /** How far past the path center a beam reaches. */
 export const BEAM_REACH = 1.5;
+const COIN_DROP = 1.6;
+
+/** Where a ring sits in the hero's view at its cue: radians toward the cue's side, and above the view. */
+const RING_YAW = 0.5;
+const RING_EL = 0.26;
+/** Camera height over the rail (see CameraRig). */
+const EYE_Y = 0.3;
+const RING_NEAR = 14;
+const RING_FAR = 44;
+/** Floating rings (no facade in the right spot) hang this far out. */
+const RING_AIR = 22;
+/** Ring radius for a distance: about the same size on screen wherever it hangs. */
+const ringRadius = (dist: number) => clamp(dist * 0.105, 2, 4.4);
 
 export interface Swing {
   cue: Cue;
@@ -37,7 +57,10 @@ export interface Swing {
   dist: number;
   dip: number;
   sway: number;
+  /** Center of the ring the web sticks to. */
   anchor: Vector3;
+  /** Ring radius, meters. */
+  ring: number;
 }
 
 export interface Beam {
@@ -256,6 +279,7 @@ export class Route {
         dip: clamp(dist * 0.28, 4, 11),
         sway: clamp(dist * 0.1, 1.5, 3.5),
         anchor: new Vector3(),
+        ring: 2.5,
       });
       s += dist;
     });
@@ -333,26 +357,120 @@ export class Route {
     return { s, y: this.topY(s) - w.dip * sin2, lat: w.cue.side * w.sway * sin2 };
   }
 
+  /** The hero's eye at route beat r, shifted over if an on-time lean has it dodging then. */
+  private eyeAt(r: number, leans: Cue[], smp: RailSample, out: Vector3) {
+    this.sample(r, smp);
+    out.copy(smp.pos);
+    out.y += EYE_Y;
+    const lean = leans.find((c) => r >= c.beat && r < c.beat + BEAM_DELAY + 0.8);
+    if (lean) out.addScaledVector(smp.right, lean.side * DODGE_OFFSET);
+    return out;
+  }
+
+  /** The camera's yaw and pitch along an on-time ride, per sample: CameraRig's smoothing replayed. */
+  private simulateView() {
+    const n = this.sS.length;
+    const yaw = new Float32Array(n), pitch = new Float32Array(n);
+    const dt = BEAT / SAMPLES_PER_BEAT;
+    const at = newSample(), ahead = newSample();
+    const vel = new Vector3(), step = new Vector3(), prev = new Vector3(), head = new Vector3();
+    let y = 0, p = -0.1;
+    for (let i = 0; i < n; i++) {
+      const r = this.r0 + i / SAMPLES_PER_BEAT;
+      this.sample(r, at);
+      this.sample(r + 0.8, ahead);
+      head.subVectors(ahead.pos, at.pos).setY(0);
+      if (head.lengthSq() > 1) head.normalize();
+      else head.copy(at.fwd);
+      const targetYaw = Math.atan2(-head.x, -head.z);
+      if (i === 0) {
+        y = targetYaw;
+        prev.copy(at.pos);
+      }
+      step.subVectors(at.pos, prev).divideScalar(dt);
+      prev.copy(at.pos);
+      vel.lerp(step, 1 - Math.exp(-12 * dt));
+      y = dampAngle(y, targetYaw, TUNING.yawFollow, dt);
+      const targetPitch = r <= LEAP_BEAT ? -0.12 : flightPitch(vel.y, Math.hypot(vel.x, vel.z));
+      p = damp(p, targetPitch, TUNING.pitchFollow, dt);
+      yaw[i] = y;
+      pitch[i] = p;
+    }
+    return { yaw, pitch };
+  }
+
   private placeAnchors(world: CollisionWorld) {
+    const leans = this.cues.filter((c) => c.kind === "lean");
+    const view = this.simulateView();
     const smp = newSample();
-    const yaws = [0.35, 0.55, 0.15, 0.8, -0.1, 1.05];
-    const els = [0.62, 0.8, 0.45, 1.0];
-    const dir = new Vector3(), h = new Vector3(), side = new Vector3();
+    const eye = new Vector3(), from = new Vector3(), fwd = new Vector3(), out = new Vector3();
+    const dir = new Vector3(), p = new Vector3(), v = new Vector3();
+    const clear = (a: Vector3, b: Vector3) => {
+      v.subVectors(b, a);
+      const d = v.length();
+      return !world.raycast(a, v.divideScalar(d), d - 1, false);
+    };
+    // Is p on screen (with margin for the ring) from the on-time camera at route beat r? Narrowest FOV, to be safe.
+    const tanV = Math.tan(((TUNING.fovBase / 2) * Math.PI) / 180), tanH = tanV * (16 / 9);
+    const onScreen = (r: number, p: Vector3) => {
+      const i = clamp(Math.round((r - this.r0) * SAMPLES_PER_BEAT), 0, view.yaw.length - 1);
+      const y = view.yaw[i], pt = view.pitch[i];
+      this.eyeAt(r, leans, smp, from);
+      v.subVectors(p, from);
+      const f = -Math.cos(pt) * Math.sin(y) * v.x + Math.sin(pt) * v.y - Math.cos(pt) * Math.cos(y) * v.z;
+      if (f <= 1) return false;
+      const x = (Math.cos(y) * v.x - Math.sin(y) * v.z) / f / tanH;
+      const u = (Math.sin(pt) * Math.sin(y) * v.x + Math.cos(pt) * v.y + Math.sin(pt) * Math.cos(y) * v.z) / f / tanV;
+      return Math.abs(x) < 0.92 && Math.abs(u) < 0.88;
+    };
     for (const w of this.swings) {
-      this.sample(w.start + (w.end - w.start) * 0.5, smp);
-      side.copy(smp.right).multiplyScalar(w.cue.side);
-      let best: { p: Vector3; score: number } | null = null;
-      for (const yaw of yaws) {
-        h.copy(side).multiplyScalar(Math.cos(yaw)).addScaledVector(smp.fwd, Math.sin(yaw));
-        for (const el of els) {
-          dir.copy(h).multiplyScalar(Math.cos(el)).addScaledVector(UP, Math.sin(el)).normalize();
-          const hit = world.raycast(smp.pos, dir, 70, true);
-          if (!hit || hit.dist < 10 || hit.point.y - smp.pos.y < 8) continue;
-          const score = Math.abs(hit.dist - 26) + Math.abs(yaw - 0.35) * 8 + Math.abs(el - 0.62) * 6 + (hit.collider.kind === "obstacle" ? 4 : 0);
-          if (!best || score < best.score) best = { p: hit.point.clone().addScaledVector(hit.normal, 0.25), score };
+      const b = w.start;
+      this.eyeAt(b, leans, smp, eye);
+      const vi = clamp(Math.round((b - this.r0) * SAMPLES_PER_BEAT), 0, view.yaw.length - 1);
+      const viewPitch = view.pitch[vi];
+      fwd.set(-Math.sin(view.yaw[vi]), 0, -Math.cos(view.yaw[vi]));
+      out.set(-fwd.z, 0, fwd.x).multiplyScalar(w.cue.side);
+      let best: { p: Vector3; r: number; score: number } | null = null;
+      for (const dy of [0, 0.08, -0.08, 0.16, -0.16]) {
+        for (const de of [0, -0.07, 0.07, -0.14, -0.21]) {
+          const yaw = RING_YAW + dy, el = RING_EL + de + viewPitch;
+          dir.copy(fwd).multiplyScalar(Math.cos(yaw)).addScaledVector(out, Math.sin(yaw));
+          dir.multiplyScalar(Math.cos(el)).addScaledVector(UP, Math.sin(el)).normalize();
+          // On a facade if one is in the right spot (stood off it so the ring never cuts in), else in the air.
+          const hit = world.raycast(eye, dir, RING_FAR, true);
+          if (hit && hit.dist < RING_NEAR) continue;
+          let r: number;
+          if (hit) {
+            r = ringRadius(hit.dist);
+            p.copy(hit.point).addScaledVector(hit.normal, r + 0.4);
+          } else {
+            r = ringRadius(RING_AIR);
+            p.copy(eye).addScaledVector(dir, RING_AIR);
+          }
+          if (!clear(eye, p)) continue;
+          // Score where it really ends up in the view, then how well it shows on the way in.
+          v.subVectors(p, eye);
+          const d = v.length();
+          v.divideScalar(d);
+          const fy = Math.atan2(v.dot(out), v.dot(fwd));
+          const fe = Math.asin(v.y) - viewPitch;
+          let score = Math.abs(fy - RING_YAW) * 10 + Math.abs(fe - RING_EL) * 8 + Math.abs(d - 26) * 0.05 + (hit ? 0 : 1.5);
+          // The approach ring closes over the last two beats: the ring must be in sight for all of it.
+          for (const k of [0.5, 1, 1.5, 2, 2.5, 3]) {
+            const at = b - k;
+            if (at <= LEAP_BEAT) continue;
+            if (!onScreen(at, p) || !clear(this.eyeAt(at, leans, smp, from), p)) score += k <= 2 ? 3 : 1;
+          }
+          if (!best || score < best.score) best = { p: p.clone(), r, score };
         }
       }
-      w.anchor.copy(best ? best.p : smp.pos.clone().addScaledVector(side, 14).addScaledVector(smp.fwd, 6).addScaledVector(UP, 20));
+      if (best) {
+        w.anchor.copy(best.p);
+        w.ring = best.r;
+      } else {
+        w.anchor.copy(eye).addScaledVector(fwd, 18).addScaledVector(out, 10).addScaledVector(UP, 6);
+        w.ring = ringRadius(RING_AIR);
+      }
     }
   }
 
@@ -364,9 +482,13 @@ export class Route {
       this.sample(r, smp);
       const index = this.beams.length;
       this.beams.push({ cue, r, pos: smp.pos.clone(), right: smp.right.clone() });
-      for (const dr of [-0.3, 0, 0.3]) {
+      // Coins trail through the gap past the girder, hung low and far enough ahead that they're
+      // collected (at r) before the hero reaches them instead of sweeping through the view.
+      for (const dr of [0.45, 0.8, 1.15]) {
         this.sample(r + dr, smp);
-        this.coins.push({ pos: smp.pos.clone().addScaledVector(smp.right, cue.side * DODGE_OFFSET), beam: index });
+        const pos = smp.pos.clone().addScaledVector(smp.right, cue.side * DODGE_OFFSET);
+        pos.y -= COIN_DROP;
+        this.coins.push({ pos, beam: index });
       }
     }
   }

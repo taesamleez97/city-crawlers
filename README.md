@@ -11,11 +11,19 @@ then Tower Ave to the finish ring.
 
 ## How it plays
 
-| Move | Body | On screen |
+| Move | Body | In the city |
 |---|---|---|
-| Ready pose | fists up by your shoulders (this "loads" each web-shooter) | a white ring around each wrist in the camera view |
-| Shoot a web | punch that arm straight up and out, about 45°, on the beat | blue (left) and pink (right) circles slide down the lanes; the matching target lights up in the camera view two beats ahead |
-| Dodge | lean your shoulders left or right | orange LEAN arrows |
+| Ready pose | fists up by your shoulders (this "loads" each web-shooter) | a white ring around each wrist in the camera view (Get Ready screen) |
+| Shoot a web | punch that arm straight up and out, about 45°, on the beat | a ring on a facade ahead, blue with the left-arm glyph or pink with the right; shoot as its outer circle closes onto it |
+| Dodge | lean your shoulders left or right | a crane girder swings into the street with an orange chevron board on its face; the chevrons fill in over the last beat and a half and flash white on the beat |
+
+There are no lanes or side panels: every cue lives in the world. Rings appear four beats
+ahead, placed (using the camera's own on-time path) up and toward the side of the arm that
+shoots them, and the outer approach circle closes over the last two beats. A hit leaves a
+web splat with a shockwave and the grade (PERFECT / GREAT / GOOD, with EARLY or LATE) under
+the ring; a miss turns the ring grey. Girders show five beats ahead, with the chevrons
+marching while you wait. A clean lean carries you through the gap and collects its coins;
+a late one is an OUCH and the girder swings.
 
 A shot fires when an armed arm reaches full stretch, pointing out to the side or up (not
 down or across the body). Pulling the arm back in re-arms it. A missed web makes the hero
@@ -30,8 +38,9 @@ The remote never plays the game; it only drives menus (OK, Back, arrows).
   land at full stretch. Steps: find your spot (the box turns green when both raised fists
   fit), fists up, shoot right, shoot left, lean left, lean right. OK skips the tutorial once
   you're tracked.
-- **In play**: a small camera view at the bottom center lights each side's target as its
-  cue approaches, and the 3D arms copy yours.
+- **In play**: the city fills the screen and the 3D arms copy yours. A small camera view
+  comes up at the bottom center only while your framing needs fixing, and hides again once
+  you're back in your spot.
 - **Lost you**: if the camera loses you for a moment the song pauses and the mirror comes
   back with what to fix ("Step back", "Move to your left", "Show both hands"). It resumes
   with a 3-2-1 once you're back in your spot.
@@ -127,9 +136,10 @@ src/
   game/      game.ts (state machine, get-ready steps, scoring, Little tools), subject.ts
   input/     motion.ts (pose → web-shoot and lean gestures, framing checks)
   rhythm/    song.ts (the chart), music.ts (synth + Conductor clock), judge.ts (timing
-             windows), route.ts (anchors and rails), dressing.ts (coins, girders, finish)
-  view/      bodyGuide.ts (camera mirror and pip), cueStyle.ts (icons, figures), lanes.ts,
-             cueMarkers.ts, hud.ts, arms.ts (IK arms that copy the player), cameraRig.ts, fx.ts
+             windows), route.ts (rails, ring placement), dressing.ts (coins, girders, finish)
+  view/      worldCues.ts (rings, girder boards and grade popups in the city), bodyGuide.ts
+             (camera mirror and pip), cueStyle.ts (icons, figures), hud.ts, arms.ts (IK arms
+             that copy the player), cameraRig.ts, fx.ts
   world/     cityLayout.ts (the route), city.ts / buildings.ts (procedural blocks),
              props.ts (GLB loading), traffic.ts, sky.ts, palette.ts
   core/      input.ts (menus and ?keys), quality.ts, audio.ts, math.ts

@@ -1,16 +1,12 @@
-// One visual language for cues, shared by the HUD lanes, the in-world markers and
-// the body guide: web shots are round, blue (left) or pink (right), with an arm
-// punching up and out; lean cues are orange arrows. Color, shape and icon each
-// tell them apart on their own. Figures are drawn as a mirror: the player's
-// right arm is on the right.
+// One visual language for cues, shared by the rings and signs in the city, the
+// title card and the body guide: web shots are round, blue (left) or pink
+// (right), with an arm punching up and out; lean cues are orange arrows. Color,
+// shape and icon each tell them apart on their own. Figures are drawn as a
+// mirror: the player's right arm is on the right.
 
 export const LEFT_COLOR = "#33b4ff";
 export const RIGHT_COLOR = "#ff5aa8";
 export const LEAN_COLOR = "#ff9a1f";
-
-/** Open hand, 24×24 (Material Icons "pan_tool", Apache-2.0). */
-export const HAND_PATH =
-  "M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.08 0-2.1-.43-2.85-1.19L1 14.83s1.26-1.23 1.3-1.25c.22-.19.49-.29.79-.29.22 0 .42.06.6.16.04.01 4.31 2.46 4.31 2.46V4c0-.83.67-1.5 1.5-1.5S11 3.17 11 4v7h1V1.5c0-.83.67-1.5 1.5-1.5S15 .67 15 1.5V11h1V2.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5V11h1V5.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5z";
 
 const flip = (side: number, w: number) => (side < 0 ? `transform="translate(${w} 0) scale(-1 1)"` : "");
 
