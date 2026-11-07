@@ -41,13 +41,23 @@ The remote never plays the game; it only drives menus (OK, Back, arrows).
 
 ```bash
 npm install                 # needs NODE_AUTH_TOKEN for @kabletv/little-sdk (see below)
-npm run dev                 # http://127.0.0.1:7140 (desktop browser: no camera, see flags)
-little dev                  # the Little simulator: uses this Mac's webcam for pose
+npm run dev                 # http://127.0.0.1:7140 — plays with this Mac's webcam (below)
+little dev                  # the Little simulator: Little's own pose service on the webcam
 npm run assets              # rebuild every model with Blender (only after editing assets)
 ```
 
 Node 22+ is required (Little's floor). Without the SDK installed, Vite aliases
 `@kabletv/little-sdk` to `src/platform/little-stub.ts`, so the game still runs in a browser.
+
+### Playing on the Mac
+
+In a plain browser there is no Little host, so `src/platform/webcam.ts` stands in for it:
+the page asks for the webcam and runs MediaPipe's Pose Landmarker (the "full" model, or
+"heavy" with `?accuracy=high`), sending frames in the same shape as Little's
+`sense.motion`. The gesture code, the camera mirror and the coaching run unchanged. The
+model and its WASM load from Google's and jsDelivr's CDNs on first use. Inside a Little
+host (the TV or the simulator) this path is never taken. It's a different tracker from the
+TV's, so do final timing and threshold tuning on the TV.
 
 ## Run it on the TV (camera)
 
@@ -89,7 +99,7 @@ and pose tracking.
 | `?keys` | desk testing without a camera: Q/E shoot left/right webs, A/D lean |
 | `?autoplay` | a bot plays every cue perfectly (`?autoplay=miss` drops every fourth) |
 | `?motionOffset=<ms>` | extra pose latency to subtract from shot times, if hits read consistently late on hardware |
-| `?accuracy=high` | ask the pose tracker for its high-accuracy mode |
+| `?accuracy=high` | ask the pose tracker for its high-accuracy mode (on the Mac: the heavy model) |
 | `?quality=low\|medium\|high\|ultra` | lock a quality tier (default: adaptive, starts at medium) |
 | `?arms=custom` | the in-house blocky arms instead of the adapted PSX arms pack |
 | `?littleDebug` | SDK debug/inspector mode |
@@ -123,7 +133,8 @@ src/
   world/     cityLayout.ts (the route), city.ts / buildings.ts (procedural blocks),
              props.ts (GLB loading), traffic.ts, sky.ts, palette.ts
   core/      input.ts (menus and ?keys), quality.ts, audio.ts, math.ts
-  platform/  little.ts (SDK wrapper: motion, camera, tools), little-stub.ts
+  platform/  little.ts (SDK wrapper: motion, camera, tools), webcam.ts (desktop stand-in),
+             little-stub.ts
 public/little/manifest.json   capabilities: sense.motion, media.camera
 tools/blender/                headless Blender scripts (build, adapt, preview)
 tools/pipeline/               npm run assets: Blender → glTF-Transform → public/models

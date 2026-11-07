@@ -1,5 +1,7 @@
 import * as sdk from "@kabletv/little-sdk";
 
+import { webcamAvailable, webcamCamera, webcamMotion } from "./webcam";
+
 // The narrow slice of the Little SDK the game depends on. Everything else in the
 // codebase talks to this interface, so the stub and the real SDK are interchangeable.
 export interface LittlePlatform {
@@ -48,9 +50,11 @@ export function connectLittle(): LittlePlatform {
     emit: (name, data) => void app.emit?.(name, data ?? {}),
     saveState: (state) => void app.saveState?.(state)?.catch?.(() => {}),
     exit: () => void app.exit?.(),
-    can: (c) => !!app.can?.(c),
+    // A host always enters at startup; without one (a desktop browser) the webcam stands in.
+    can: (c) => (entered ? !!app.can?.(c) : (c === "sense.motion" || c === "media.camera") && webcamAvailable()),
     setActiveTools: (names) => void app.setActiveTools?.(names),
     motion: (handlers, options) => {
+      if (!entered) return webcamMotion(handlers, options);
       if (!app.sense?.motion) {
         handlers.onStatus?.({ state: "unavailable", reason: "no_host" });
         return () => {};
@@ -60,6 +64,7 @@ export function connectLittle(): LittlePlatform {
     },
     camera: async () => {
       const none = (reason: string): CameraFeed => ({ stream: null, reason, stop: () => {} });
+      if (!entered) return webcamCamera();
       if (!app.media?.camera || !app.can?.("media.camera")) return none("not_granted");
       try {
         const grant = await app.media.camera({ facing: "user", width: 640, height: 360, fps: 15 });

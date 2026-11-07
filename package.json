@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@kabletv/little-sdk": "^0.39.1",
+    "@mediapipe/tasks-vision": "1.2.2",
     "three": "^0.187.0"
   },
   "devDependencies": {

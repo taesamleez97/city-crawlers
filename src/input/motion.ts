@@ -249,8 +249,11 @@ export class MotionInput {
     const aspect = rot === 90 || rot === 270 ? h / w : w / h;
     this.aspect = aspect;
     const mirrorView = !f.image.mirrored;
+    // Pixels or 0..1? Off-picture joints can be extrapolated well past 1, so only confident ones decide.
     let pixels = false;
-    for (const l of pose.landmarks) if (l.position && (l.position.x > 1.5 || l.position.y > 1.5)) pixels = true;
+    for (const l of pose.landmarks) {
+      if (l.position && l.state !== "missing" && l.confidence >= MIN_CONFIDENCE && (l.position.x > 4 || l.position.y > 4)) pixels = true;
+    }
     this.ok.fill(0);
     for (const l of pose.landmarks) {
       const i = INDEX.get(l.name);
