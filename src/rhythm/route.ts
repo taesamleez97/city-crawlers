@@ -1,0 +1,411 @@
+// The on-rails route: the chart turned into a path through Downtown.
+//
+// Each hand cue starts one swing that lasts until the next hand cue. Position is
+// a function of "route beats" r: on time, r equals the music beat; after a miss
+// the hero falls behind for a moment and catches up, but the path itself never
+// changes. Swing tops land on the beats (that's when the next web fires), the
+// bottoms fall in between, and every swing leans toward its web's anchor.
+
+import { Vector3 } from "three";
+
+import { clamp, smoothstep } from "../core/math";
+import { BANNERS, FINISH, ROUTE, SKYBRIDGES, START } from "../world/cityLayout";
+import type { CollisionWorld } from "../world/collision";
+import { type Cue, FINISH_BEAT, LEAP_BEAT, RESULTS_BEAT, type Side, buildChart, sectionAt } from "./song";
+
+const UP = new Vector3(0, 1, 0);
+const CORNER_RADIUS = 34;
+const SAMPLES_PER_BEAT = 16;
+const LEAP_DIST = 16;
+/** Forward speed varies ±40% over a swing: slow at the tops, fast through the bottom. */
+const SWING_EASE = 0.4;
+const CLEARANCE = 1.6;
+const PERCH_Y = START.y + 0.9;
+
+/** Lean obstacles sit this far (beats) after their cue, so an on-time lean is already clear. */
+export const BEAM_DELAY = 0.5;
+/** Sideways shift of a successful lean, meters. */
+export const DODGE_OFFSET = 5.5;
+/** How far past the path center a beam reaches. */
+export const BEAM_REACH = 1.5;
+
+export interface Swing {
+  cue: Cue;
+  start: number;
+  end: number;
+  s0: number;
+  dist: number;
+  dip: number;
+  sway: number;
+  anchor: Vector3;
+}
+
+export interface Beam {
+  cue: Cue;
+  /** Route beat at which the hero passes it. */
+  r: number;
+  /** Path point (center of the street) where it crosses. */
+  pos: Vector3;
+  right: Vector3;
+}
+
+export interface Coin {
+  pos: Vector3;
+  beam: number;
+}
+
+export interface RailSample {
+  pos: Vector3;
+  fwd: Vector3;
+  right: Vector3;
+  /** Swing index, -1 during the leap, -2 perched, -3 after the finish. */
+  swing: number;
+  u: number;
+  /** Lowest / highest the hero may be pushed here without hitting an obstacle. */
+  floor: number;
+  ceil: number;
+}
+
+export const newSample = (): RailSample => ({
+  pos: new Vector3(), fwd: new Vector3(0, 0, -1), right: new Vector3(1, 0, 0), swing: -2, u: 0, floor: -Infinity, ceil: Infinity,
+});
+
+/** Street centerline: the layout polyline with rounded corners, by arc length. */
+class Centerline {
+  private readonly xs: number[] = [];
+  private readonly zs: number[] = [];
+  private readonly ss: number[] = [];
+  readonly corners: Array<{ s: number; turn: Side }> = [];
+  length = 0;
+
+  constructor(poly: Array<[number, number]>, radius: number) {
+    const push = (x: number, z: number) => {
+      const n = this.xs.length;
+      if (n) {
+        const d = Math.hypot(x - this.xs[n - 1], z - this.zs[n - 1]);
+        if (d < 1e-6) return;
+        this.ss.push(this.ss[n - 1] + d);
+      } else this.ss.push(0);
+      this.xs.push(x);
+      this.zs.push(z);
+    };
+    const lineTo = (x: number, z: number) => {
+      const n = this.xs.length;
+      const x0 = this.xs[n - 1], z0 = this.zs[n - 1];
+      const steps = Math.max(1, Math.ceil(Math.hypot(x - x0, z - z0)));
+      for (let k = 1; k <= steps; k++) push(x0 + ((x - x0) * k) / steps, z0 + ((z - z0) * k) / steps);
+    };
+    push(poly[0][0], poly[0][1]);
+    for (let i = 1; i < poly.length; i++) {
+      const [bx, bz] = poly[i];
+      if (i === poly.length - 1) {
+        lineTo(bx, bz);
+        break;
+      }
+      const [ax, az] = poly[i - 1];
+      const [cx, cz] = poly[i + 1];
+      const l1 = Math.hypot(bx - ax, bz - az), l2 = Math.hypot(cx - bx, cz - bz);
+      const d1x = (bx - ax) / l1, d1z = (bz - az) / l1, d2x = (cx - bx) / l2, d2z = (cz - bz) / l2;
+      const t = Math.min(radius, l1 / 2, l2 / 2);
+      const p1x = bx - d1x * t, p1z = bz - d1z * t, p2x = bx + d2x * t, p2z = bz + d2z * t;
+      lineTo(p1x, p1z);
+      const steps = 48;
+      for (let k = 1; k <= steps; k++) {
+        const q = k / steps, a = (1 - q) * (1 - q), b = 2 * (1 - q) * q, c = q * q;
+        push(a * p1x + b * bx + c * p2x, a * p1z + b * bz + c * p2z);
+        if (k === steps / 2) {
+          // right(d1) · d2 > 0 means a right turn.
+          this.corners.push({ s: this.ss[this.ss.length - 1], turn: -d1z * d2x + d1x * d2z > 0 ? 1 : -1 });
+        }
+      }
+    }
+    this.length = this.ss[this.ss.length - 1];
+  }
+
+  /** Position and unit tangent at arc length s (extrapolates past either end). */
+  at(s: number, pos: Vector3, tan: Vector3) {
+    const n = this.ss.length;
+    let i: number;
+    if (s <= 0) i = 0;
+    else if (s >= this.length) i = n - 2;
+    else {
+      let lo = 0, hi = n - 1;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (this.ss[mid] <= s) lo = mid;
+        else hi = mid;
+      }
+      i = lo;
+    }
+    const seg = this.ss[i + 1] - this.ss[i];
+    const t = (s - this.ss[i]) / seg;
+    tan.set(this.xs[i + 1] - this.xs[i], 0, this.zs[i + 1] - this.zs[i]).divideScalar(seg);
+    pos.set(this.xs[i] + (this.xs[i + 1] - this.xs[i]) * t, 0, this.zs[i] + (this.zs[i + 1] - this.zs[i]) * t);
+    // Smooth the tangent across the 1 m polyline steps.
+    if (i > 0 && i < n - 2) {
+      const k = t - 0.5;
+      const j = k < 0 ? i - 1 : i + 1;
+      const sj = this.ss[j + 1] - this.ss[j];
+      const w = Math.abs(k);
+      tan.multiplyScalar(1 - w).add(new Vector3(this.xs[j + 1] - this.xs[j], 0, this.zs[j + 1] - this.zs[j]).multiplyScalar(w / sj));
+      tan.normalize();
+    }
+    return pos;
+  }
+
+  project(x: number, z: number): number {
+    let best = 0, bestD = Infinity;
+    for (let i = 0; i < this.xs.length; i++) {
+      const d = (this.xs[i] - x) ** 2 + (this.zs[i] - z) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = this.ss[i];
+      }
+    }
+    return best;
+  }
+}
+
+type Obstacle = { s: number; half: number; lo: number; hi: number; mode: "over" | "under" };
+
+export class Route {
+  readonly cues: Cue[];
+  readonly swings: Swing[] = [];
+  readonly beams: Beam[] = [];
+  readonly coins: Coin[] = [];
+  readonly length: number;
+  readonly finish = new Vector3(FINISH.x, FINISH.y, FINISH.z);
+  private readonly line: Centerline;
+  private readonly r0 = LEAP_BEAT;
+  private readonly r1 = RESULTS_BEAT + 4;
+  private readonly sS: Float32Array;
+  private readonly sX: Float32Array;
+  private readonly sY: Float32Array;
+  private readonly sZ: Float32Array;
+  private readonly sFloor: Float32Array;
+  private readonly sCeil: Float32Array;
+  private readonly tmpP = new Vector3();
+  private readonly tmpT = new Vector3();
+
+  constructor(world: CollisionWorld) {
+    const poly: Array<[number, number]> = [[START.x, START.z], ...ROUTE.slice(1, -1), [FINISH.x, FINISH.z]];
+    this.line = new Centerline(poly, CORNER_RADIUS);
+    this.length = this.line.length;
+    this.cues = buildChart();
+
+    this.planSwings();
+    const obstacles = this.planObstacles();
+
+    // Sample the whole ride once; the game only interpolates.
+    const n = Math.ceil((this.r1 - this.r0) * SAMPLES_PER_BEAT) + 1;
+    this.sS = new Float32Array(n);
+    this.sX = new Float32Array(n);
+    this.sY = new Float32Array(n);
+    this.sZ = new Float32Array(n);
+    this.sFloor = new Float32Array(n);
+    this.sCeil = new Float32Array(n);
+    const yRaw = new Float32Array(n);
+    const lat = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const raw = this.rawAt(this.r0 + i / SAMPLES_PER_BEAT);
+      this.sS[i] = raw.s;
+      yRaw[i] = raw.y;
+      lat[i] = raw.lat;
+    }
+    // Duck under / rise over the banners and skybridges with smooth bumps.
+    const bump = new Float32Array(n);
+    this.sFloor.fill(-1e4);
+    this.sCeil.fill(1e4);
+    for (const o of obstacles) {
+      let need = 0;
+      for (let i = 0; i < n; i++) {
+        if (Math.abs(this.sS[i] - o.s) > o.half) continue;
+        need = o.mode === "over" ? Math.max(need, o.lo + CLEARANCE - yRaw[i]) : Math.min(need, o.hi - CLEARANCE - yRaw[i]);
+      }
+      for (let i = 0; i < n; i++) {
+        const w = this.window(this.sS[i], o);
+        if (w <= 0) continue;
+        bump[i] += need * w;
+        if (o.mode === "over") this.sFloor[i] = Math.max(this.sFloor[i], o.lo + CLEARANCE - (1 - w) * 40);
+        else this.sCeil[i] = Math.min(this.sCeil[i], o.hi - CLEARANCE + (1 - w) * 40);
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      this.line.at(this.sS[i], this.tmpP, this.tmpT);
+      const rx = -this.tmpT.z, rz = this.tmpT.x;
+      this.sX[i] = this.tmpP.x + rx * lat[i];
+      this.sZ[i] = this.tmpP.z + rz * lat[i];
+      this.sY[i] = yRaw[i] + bump[i];
+    }
+
+    this.placeAnchors(world);
+    this.placeBeams();
+  }
+
+  // ---------------------------------------------------------------- planning
+  private planSwings() {
+    const hands = this.cues.filter((c) => c.kind === "hand");
+    const spans = hands.map((c, i) => ({ cue: c, start: c.beat, end: i + 1 < hands.length ? hands[i + 1].beat : FINISH_BEAT }));
+    const weights = spans.map((sp) => (sp.end - sp.start) * sectionAt(sp.start).pace);
+    const total = weights.reduce((a, b) => a + b, 0);
+    let s = LEAP_DIST;
+    spans.forEach((sp, i) => {
+      const dist = (weights[i] / total) * (this.length - LEAP_DIST);
+      this.swings.push({
+        cue: sp.cue, start: sp.start, end: sp.end, s0: s, dist,
+        dip: clamp(dist * 0.28, 4, 11),
+        sway: clamp(dist * 0.1, 1.5, 3.5),
+        anchor: new Vector3(),
+      });
+      s += dist;
+    });
+    // Corner swings web the inside of the turn.
+    for (const c of this.line.corners) {
+      const i = this.swings.findIndex((w) => c.s >= w.s0 && c.s < w.s0 + w.dist);
+      if (i < 0) continue;
+      const u = (c.s - this.swings[i].s0) / this.swings[i].dist;
+      const force = [i];
+      if (u < 0.3 && i > 0) force.push(i - 1);
+      if (u > 0.7 && i + 1 < this.swings.length) force.push(i + 1);
+      for (const k of force) this.swings[k].cue.side = c.turn;
+    }
+  }
+
+  private planObstacles(): Obstacle[] {
+    const out: Obstacle[] = [];
+    // Which way the rail passes each one: [banners], [skybridges].
+    const bannerModes: Array<Obstacle["mode"]> = ["under", "over", "under"];
+    const bridgeModes: Array<Obstacle["mode"]> = ["over", "under", "under"];
+    BANNERS.forEach((b, i) => {
+      const s = this.line.project((b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2);
+      out.push({ s, half: 3, lo: b.y, hi: b.y + b.h + 0.35, mode: bannerModes[i] ?? "under" });
+    });
+    SKYBRIDGES.forEach((b, i) => {
+      const s = this.line.project((b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2);
+      const along = Math.min(b.x1 - b.x0, b.z1 - b.z0);
+      out.push({ s, half: along / 2 + 2.5, lo: b.y0 - 0.5, hi: b.y1 + 0.5, mode: bridgeModes[i] ?? "under" });
+    });
+    return out;
+  }
+
+  /** 1 across the obstacle, easing to 0 over 24 m either side. */
+  private window(s: number, o: Obstacle) {
+    const d = Math.abs(s - o.s) - o.half;
+    if (d <= 0) return 1;
+    if (d >= 24) return 0;
+    return 0.5 + 0.5 * Math.cos((Math.PI * d) / 24);
+  }
+
+  private topY(s: number) {
+    return 30 - 3 * smoothstep(this.length - 140, this.length, s);
+  }
+
+  private swingIndex(r: number) {
+    let lo = 0, hi = this.swings.length - 1;
+    if (r < this.swings[0].start) return -1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (this.swings[mid].start <= r) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  }
+
+  private rawAt(r: number): { s: number; y: number; lat: number } {
+    const first = this.swings[0];
+    if (r <= LEAP_BEAT) return { s: 0, y: PERCH_Y, lat: 0 };
+    if (r < first.start) {
+      const u = (r - LEAP_BEAT) / (first.start - LEAP_BEAT);
+      const top = this.topY(LEAP_DIST);
+      const hop = 5;
+      return { s: LEAP_DIST * u, y: PERCH_Y + hop * u - (PERCH_Y - top + hop) * u * u, lat: 0 };
+    }
+    if (r >= FINISH_BEAT) {
+      const last = this.swings[this.swings.length - 1];
+      const vEnd = ((1 - SWING_EASE) * last.dist) / (last.end - last.start);
+      const e = r - FINISH_BEAT;
+      return { s: this.length + vEnd * 1.6 * (1 - Math.exp(-e / 1.6)), y: FINISH.y + 2.5 * (1 - Math.exp(-e / 1.2)), lat: 0 };
+    }
+    const w = this.swings[this.swingIndex(r)];
+    const u = (r - w.start) / (w.end - w.start);
+    const s = w.s0 + w.dist * (u - (SWING_EASE * Math.sin(2 * Math.PI * u)) / (2 * Math.PI));
+    const sin2 = Math.sin(Math.PI * u) ** 2;
+    return { s, y: this.topY(s) - w.dip * sin2, lat: w.cue.side * w.sway * sin2 };
+  }
+
+  private placeAnchors(world: CollisionWorld) {
+    const smp = newSample();
+    const yaws = [0.35, 0.55, 0.15, 0.8, -0.1, 1.05];
+    const els = [0.62, 0.8, 0.45, 1.0];
+    const dir = new Vector3(), h = new Vector3(), side = new Vector3();
+    for (const w of this.swings) {
+      this.sample(w.start + (w.end - w.start) * 0.5, smp);
+      side.copy(smp.right).multiplyScalar(w.cue.side);
+      let best: { p: Vector3; score: number } | null = null;
+      for (const yaw of yaws) {
+        h.copy(side).multiplyScalar(Math.cos(yaw)).addScaledVector(smp.fwd, Math.sin(yaw));
+        for (const el of els) {
+          dir.copy(h).multiplyScalar(Math.cos(el)).addScaledVector(UP, Math.sin(el)).normalize();
+          const hit = world.raycast(smp.pos, dir, 70, true);
+          if (!hit || hit.dist < 10 || hit.point.y - smp.pos.y < 8) continue;
+          const score = Math.abs(hit.dist - 26) + Math.abs(yaw - 0.35) * 8 + Math.abs(el - 0.62) * 6 + (hit.collider.kind === "obstacle" ? 4 : 0);
+          if (!best || score < best.score) best = { p: hit.point.clone().addScaledVector(hit.normal, 0.25), score };
+        }
+      }
+      w.anchor.copy(best ? best.p : smp.pos.clone().addScaledVector(side, 14).addScaledVector(smp.fwd, 6).addScaledVector(UP, 20));
+    }
+  }
+
+  private placeBeams() {
+    const smp = newSample();
+    for (const cue of this.cues) {
+      if (cue.kind !== "lean") continue;
+      const r = cue.beat + BEAM_DELAY;
+      this.sample(r, smp);
+      const index = this.beams.length;
+      this.beams.push({ cue, r, pos: smp.pos.clone(), right: smp.right.clone() });
+      for (const dr of [-0.3, 0, 0.3]) {
+        this.sample(r + dr, smp);
+        this.coins.push({ pos: smp.pos.clone().addScaledVector(smp.right, cue.side * DODGE_OFFSET), beam: index });
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- runtime
+  sample(r: number, out: RailSample): RailSample {
+    const f = clamp((r - this.r0) * SAMPLES_PER_BEAT, 0, this.sS.length - 1.001);
+    const i = Math.floor(f), t = f - i;
+    const L = (a: Float32Array) => a[i] + (a[i + 1] - a[i]) * t;
+    out.pos.set(L(this.sX), L(this.sY), L(this.sZ));
+    out.floor = L(this.sFloor);
+    out.ceil = L(this.sCeil);
+    this.line.at(L(this.sS), this.tmpP, out.fwd);
+    out.right.set(-out.fwd.z, 0, out.fwd.x);
+    if (r <= LEAP_BEAT) {
+      out.swing = -2;
+      out.u = 0;
+    } else if (r >= FINISH_BEAT) {
+      out.swing = -3;
+      out.u = 0;
+    } else {
+      out.swing = this.swingIndex(r);
+      const w = this.swings[out.swing];
+      out.u = w ? (r - w.start) / (w.end - w.start) : (r - LEAP_BEAT) / (this.swings[0].start - LEAP_BEAT);
+    }
+    return out;
+  }
+
+  /** Debug summary: where corners and obstacles fall. */
+  describe() {
+    return {
+      length: Math.round(this.length),
+      swings: this.swings.length,
+      beams: this.beams.length,
+      corners: this.line.corners.map((c) => {
+        const i = this.swings.findIndex((w) => c.s >= w.s0 && c.s < w.s0 + w.dist);
+        return { s: Math.round(c.s), turn: c.turn, swing: i, beat: this.swings[i]?.start };
+      }),
+      speed: this.swings.map((w) => +(w.dist / ((w.end - w.start) * 0.5)).toFixed(1)),
+    };
+  }
+}

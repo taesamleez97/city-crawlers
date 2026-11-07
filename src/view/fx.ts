@@ -11,9 +11,11 @@ const tmp = new Vector3(), tmp2 = new Vector3(), side = new Vector3();
 
 /** Camera-facing tapered ribbon from the hand to the anchor. */
 export class WebLine {
-  readonly mesh: Mesh;
+  readonly mesh: Mesh<BufferGeometry, MeshBasicMaterial>;
   private readonly pos = new Float32Array(4 * 3);
   private travel = 0;
+  private widthScale = 1;
+  private readonly recoveryColor = new Color(0x9aa3b8);
   visible = false;
 
   constructor() {
@@ -26,9 +28,12 @@ export class WebLine {
     this.mesh.visible = false;
   }
 
-  shoot() {
+  /** A recovery web (after a missed cue) is grey and thinner than an earned one. */
+  shoot(recovery = false) {
     this.travel = 0;
     this.visible = true;
+    this.widthScale = recovery ? 0.55 : 1;
+    this.mesh.material.color.copy(recovery ? this.recoveryColor : pal("web"));
   }
 
   hide() {
@@ -42,7 +47,7 @@ export class WebLine {
     const end = tmp.lerpVectors(from, to, this.travel);
     const dir = tmp2.subVectors(end, from);
     side.subVectors(cam.position, from).cross(dir).normalize();
-    const w0 = 0.022, w1 = 0.24;
+    const w0 = 0.022 * this.widthScale, w1 = 0.24 * this.widthScale;
     const p = this.pos;
     p[0] = from.x + side.x * w0; p[1] = from.y + side.y * w0; p[2] = from.z + side.z * w0;
     p[3] = from.x - side.x * w0; p[4] = from.y - side.y * w0; p[5] = from.z - side.z * w0;

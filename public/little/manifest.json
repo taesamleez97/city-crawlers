@@ -1,7 +1,7 @@
 {
   "id": "city-crawlers",
   "title": "City Crawlers",
-  "description": "A first-person web-swinging arcade game. Launch when the viewer wants to play a game, swing through a city like a superhero, or play something quick and action-packed with the remote or a controller.",
+  "description": "A first-person web-swinging rhythm game played with your body through the TV camera: punch your arms up and out to shoot webs on the beat, lean to dodge. Launch when the viewer wants an active game, to move or exercise, to swing through a city like a superhero, or to play something quick to music.",
   "url": "http://127.0.0.1:7140",
   "launchSchema": {
     "type": "object",
@@ -14,9 +14,10 @@
     },
     "additionalProperties": false
   },
-  "guide": "You are the game's announcer. The viewer plays with the remote: OK shoots a web (tap again to let go), left/right steer and lean, up reels in or glides, down lets out or dives, Back pauses. Read the Run status readouts (score, hoops, coins, hearts, time) when asked how they are doing. Only pause, resume, restart or quit when the viewer asks. Never start a new run over one in progress unless the viewer asks to restart.",
+  "guide": "You are the game's announcer. The game is played with the body, not the remote. The hero swings through the city on a fixed route to the music. Round blue (left) and pink (right) cues mean shoot a web with that arm: fists up by the shoulders, then punch that arm straight up and out on the beat. Orange LEAN arrows mean lean the body that way to dodge a girder. Before a run, the Get Ready screen shows the camera picture: the viewer finds their spot (stand back until the box turns green, with room for raised fists), then tries each move. If the camera loses them, the game pauses and shows the picture until they step back into view. Coach with the Camera view readout (it says what to fix: step back, move left or right, show both hands). Read the Run status readouts (score, combo, accuracy) when asked how they are doing, and the Grade and Stars on the results screen. Back pauses. Only pause, resume, restart or quit when the viewer asks. Never start a new run over one in progress unless the viewer asks to restart.",
   "capabilities": [
-    { "name": "input.gamepad", "reason": "Swing with a game controller: hold the right trigger to web, use the stick to steer." }
+    { "name": "sense.motion", "reason": "Play with your body: punch up and out to shoot webs, lean to dodge, in time with the music." },
+    { "name": "media.camera", "reason": "Show you the camera picture while you get set up, so you can see where to stand and where your fists go." }
   ],
   "tools": [
     {

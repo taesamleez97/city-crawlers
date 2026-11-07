@@ -2,14 +2,14 @@ import { Euler, type PerspectiveCamera, Vector3 } from "three";
 
 import { TUNING as T } from "../config";
 import { clamp, damp, dampAngle, smoothstep } from "../core/math";
-import type { Player } from "../game/player";
+import type { Subject } from "../game/subject";
 
 const EYE = new Vector3(0, 0.3, 0);
 
 /**
  * First-person camera. Comfort rules for a big screen: yaw and pitch are smoothed
  * toward the direction of travel (never snapped), roll is small and only from
- * steering, FOV widens with speed instead of the camera shaking.
+ * leaning, FOV widens with speed instead of the camera shaking.
  */
 export class CameraRig {
   yaw = 0;
@@ -17,6 +17,7 @@ export class CameraRig {
   roll = 0;
   fov: number = T.fovBase;
   private trauma = 0;
+  private kick = 0;
   private t = 0;
   private readonly euler = new Euler(0, 0, 0, "YXZ");
   /** Optional look-around for the title screen. */
@@ -24,42 +25,48 @@ export class CameraRig {
 
   constructor(readonly camera: PerspectiveCamera) {}
 
-  snap(player: Player) {
-    this.yaw = Math.atan2(-player.heading.x, -player.heading.z);
-    this.pitch = -0.08;
+  snap(s: Subject) {
+    this.yaw = Math.atan2(-s.heading.x, -s.heading.z);
+    this.pitch = -0.1;
     this.roll = 0;
     this.trauma = 0;
-    this.apply(player.pos);
+    this.kick = 0;
+    this.apply(s.pos);
   }
 
   addTrauma(amount: number) {
     this.trauma = Math.min(1, this.trauma + amount);
   }
 
-  update(dt: number, player: Player) {
+  /** A quick FOV punch: sells a web connecting. */
+  addKick(amount: number) {
+    this.kick = Math.min(1.5, this.kick + amount);
+  }
+
+  update(dt: number, s: Subject) {
     this.t += dt;
-    const hs = Math.hypot(player.vel.x, player.vel.z);
-    const targetYaw = Math.atan2(-player.heading.x, -player.heading.z);
+    const hs = Math.hypot(s.vel.x, s.vel.z);
+    const targetYaw = Math.atan2(-s.heading.x, -s.heading.z);
     this.yaw = dampAngle(this.yaw, targetYaw + Math.sin(this.t * 0.25) * this.idleSway, T.yawFollow, dt);
 
-    let targetPitch = -0.1;
-    if (player.state !== "perched") {
-      const velPitch = Math.atan2(player.vel.y, Math.max(6, hs));
-      targetPitch = clamp(velPitch * 0.4 - 0.1, -0.5, 0.22);
+    let targetPitch: number;
+    if (s.state !== "perched") {
+      const velPitch = Math.atan2(s.vel.y, Math.max(6, hs));
+      targetPitch = clamp(velPitch * 0.45 - 0.08, -0.5, 0.22);
     } else {
       targetPitch = -0.12 + Math.sin(this.t * 0.4) * 0.04 * this.idleSway;
     }
     this.pitch = damp(this.pitch, targetPitch, T.pitchFollow, dt);
 
-    const swingLean = player.state === "swing" ? player.swingSide * -0.04 : 0;
-    this.roll = damp(this.roll, -player.steer * T.rollMax + swingLean, 4, dt);
+    const swingLean = s.state === "swing" ? s.swingSide * -0.04 : 0;
+    this.roll = damp(this.roll, -s.steer * T.rollMax + swingLean, 5, dt);
 
-    const sp = player.speed;
-    const targetFov = T.fovBase + (T.fovFast - T.fovBase) * smoothstep(14, T.maxSpeed, sp);
+    const targetFov = T.fovBase + (T.fovFast - T.fovBase) * smoothstep(T.fovSpeedLo, T.fovSpeedHi, s.speed);
     this.fov = damp(this.fov, targetFov, 3, dt);
+    this.kick = Math.max(0, this.kick - dt * 4);
 
     this.trauma = Math.max(0, this.trauma - dt * 1.6);
-    this.apply(player.pos);
+    this.apply(s.pos);
   }
 
   private apply(pos: Vector3) {
@@ -68,8 +75,9 @@ export class CameraRig {
     this.camera.position.copy(pos).add(EYE);
     this.euler.set(this.pitch + n(37) * 0.05 * shake, this.yaw + n(41) * 0.05 * shake, this.roll + n(29) * 0.07 * shake);
     this.camera.quaternion.setFromEuler(this.euler);
-    if (Math.abs(this.camera.fov - this.fov) > 0.01) {
-      this.camera.fov = this.fov;
+    const fov = this.fov + this.kick * this.kick * 5;
+    if (Math.abs(this.camera.fov - fov) > 0.01) {
+      this.camera.fov = fov;
       this.camera.updateProjectionMatrix();
     }
   }

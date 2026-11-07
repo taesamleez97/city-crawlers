@@ -5,7 +5,7 @@ import {
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 import { SpringScalar, SpringVec3, clamp } from "../core/math";
-import type { Player } from "../game/player";
+import type { Subject } from "../game/subject";
 import { pal } from "../world/palette";
 
 type Side = "L" | "R";
@@ -107,6 +107,9 @@ class Arm {
 /** Arms state the game drives; the view turns it into motion. */
 type Gesture = "none" | "shoot" | "release" | "crash";
 
+/** The player's real arm from the camera: direction in arm lengths (out to its side, up) and reach. */
+export type BodyArm = { out: number; up: number; reach: number };
+
 export class ArmsView {
   readonly scene = new Scene();
   readonly camera = new PerspectiveCamera(ARMS_FOV, 16 / 9, 0.02, 10);
@@ -121,6 +124,7 @@ export class ArmsView {
   private activeSide: Side | null = null;
   private t = 0;
   private lastVel = new Vector3();
+  private readonly body: Record<Side, BodyArm | null> = { L: null, R: null };
   /** Hand position of the web-holding arm, in arms-camera NDC (for the web line). */
   readonly handNdc = new Vector3();
 
@@ -166,6 +170,22 @@ export class ArmsView {
     this.gestureT = 0;
   }
 
+  /** Mirror the player's arms (null = not seen: the arm animates on its own). */
+  setBody(left: BodyArm | null, right: BodyArm | null) {
+    this.body.L = left;
+    this.body.R = right;
+  }
+
+  /** Camera-space point for a mirrored real arm: hanging low, fists up mid-frame, thrown up into the corners. */
+  private bodyTarget(b: BodyArm, sx: number) {
+    const halfH = Math.tan(MathUtils.degToRad(ARMS_FOV / 2));
+    const halfW = halfH * this.camera.aspect;
+    const depth = 0.42 + 0.16 * clamp(b.reach, 0, 1);
+    const fx = clamp(0.5 + 0.36 * b.out, 0.34, 0.8);
+    const fy = -1.05 + 1.55 * clamp((b.up + 0.95) / 1.65, 0, 1);
+    return new Vector3(sx * fx * halfW * depth, fy * halfH * depth, -depth);
+  }
+
   private restTarget(arm: Arm, speed: number) {
     const tuck = clamp(speed / 40, 0, 1);
     return new Vector3(arm.sx * (0.27 - tuck * 0.03), -0.27 - tuck * 0.03, -0.45);
@@ -185,7 +205,7 @@ export class ArmsView {
     return new Vector3(x * depth, y * depth, -depth);
   }
 
-  update(dt: number, player: Player, mainCamera: PerspectiveCamera, sunDirWorld: Vector3) {
+  update(dt: number, player: Subject, mainCamera: PerspectiveCamera, sunDirWorld: Vector3) {
     this.t += dt;
     this.gestureT += dt;
     const speed = player.speed;
@@ -211,8 +231,15 @@ export class ArmsView {
       let grip = 0.15, open = 0, wrist = 0.1;
       const isActive = this.activeSide === side && anchorCam;
       const isGesture = this.gestureSide === side;
+      const body = this.body[side];
 
-      if (isActive) {
+      if (body && !isActive) {
+        target = this.bodyTarget(body, arm.sx);
+        const out = clamp((body.reach - 0.6) / 0.35, 0, 1);
+        grip = 1 - out;
+        open = out * 0.6;
+        wrist = 0.1 + out * 0.3;
+      } else if (isActive) {
         target = this.reachTarget(anchorCam!, 0.6, arm.sx);
         grip = 1;
         wrist = -0.15;
@@ -229,7 +256,7 @@ export class ArmsView {
         grip = 0.35;
       }
 
-      if (isGesture && this.gesture === "release" && this.gestureT < 0.35) {
+      if (!body && isGesture && this.gesture === "release" && this.gestureT < 0.35) {
         const k = this.gestureT / 0.35;
         target.set(arm.sx * (0.22 + k * 0.05), -0.05 - k * 0.2, -0.48 + k * 0.1);
         open = 1 - k;
@@ -242,7 +269,7 @@ export class ArmsView {
         grip = 0;
         wrist = 0.9;
       }
-      if (player.state === "perched") {
+      if (player.state === "perched" && !body) {
         // Crouched on the ledge, hands braced on the parapet.
         target.set(arm.sx * 0.26, -0.21 + Math.sin(this.t * 1.3 + arm.sx) * 0.006, -0.42);
         grip = 0.75;

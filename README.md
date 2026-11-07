@@ -1,23 +1,73 @@
 # City Crawlers
 
-A first-person web-swinging game for Little TV: swing through a flat-color low-poly city,
-dodge buildings and banners, steer through hoops and collect coins. Three.js + Vite +
-TypeScript, built as a Little app (a website plus `/little/manifest.json`).
+A first-person web-swinging rhythm game for Little TV, played with your body through the
+TV camera. The hero swings through a flat-color low-poly city on a fixed route set to the
+music; you shoot each web yourself by punching an arm up and out on the beat, and lean to
+dodge girders. Three.js + Vite + TypeScript, built as a Little app (a website plus
+`/little/manifest.json`).
 
-The first playable is one compact city section with a full route: Main Ave north, a
-right turn over the canal, then a tight run up Tower Ave to the finish ring.
+The first playable is one song and one route: Main Ave north, a right turn over the canal,
+then Tower Ave to the finish ring.
+
+## How it plays
+
+| Move | Body | On screen |
+|---|---|---|
+| Ready pose | fists up by your shoulders (this "loads" each web-shooter) | a white ring around each wrist in the camera view |
+| Shoot a web | punch that arm straight up and out, about 45°, on the beat | blue (left) and pink (right) circles slide down the lanes; the matching target lights up in the camera view two beats ahead |
+| Dodge | lean your shoulders left or right | orange LEAN arrows |
+
+A shot fires when an armed arm reaches full stretch, pointing out to the side or up (not
+down or across the body). Pulling the arm back in re-arms it. A missed web makes the hero
+sag and slow, then a recovery web catches up within a couple of beats.
+
+The remote never plays the game; it only drives menus (OK, Back, arrows).
+
+### Camera guidance
+
+- **Get Ready screen** (before every run): a live mirror of the camera with your skeleton
+  drawn over it, a dashed "stand like this" outline, and the two targets where your fists
+  land at full stretch. Steps: find your spot (the box turns green when both raised fists
+  fit), fists up, shoot right, shoot left, lean left, lean right. OK skips the tutorial once
+  you're tracked.
+- **In play**: a small camera view at the bottom center lights each side's target as its
+  cue approaches, and the 3D arms copy yours.
+- **Lost you**: if the camera loses you for a moment the song pauses and the mirror comes
+  back with what to fix ("Step back", "Move to your left", "Show both hands"). It resumes
+  with a 3-2-1 once you're back in your spot.
+- **Camera needed**: shown if the camera or pose tracking is refused, with the reason.
 
 ## Quick start
 
 ```bash
 npm install                 # needs NODE_AUTH_TOKEN for @kabletv/little-sdk (see below)
-npm run dev                 # http://127.0.0.1:7140 (desktop browser, keyboard)
-little dev                  # the Little simulator, same server
+npm run dev                 # http://127.0.0.1:7140 (desktop browser: no camera, see flags)
+little dev                  # the Little simulator: uses this Mac's webcam for pose
 npm run assets              # rebuild every model with Blender (only after editing assets)
 ```
 
 Node 22+ is required (Little's floor). Without the SDK installed, Vite aliases
 `@kabletv/little-sdk` to `src/platform/little-stub.ts`, so the game still runs in a browser.
+
+## Run it on the TV (camera)
+
+The television only grants `media.camera` and `sense.motion` to an **https** origin that
+your publisher org has verified. A plain LAN address (`little dev --device vim4` with the
+default `http://<this-mac>:7140`) loads the game but lands on "Camera needed".
+
+```bash
+little org create "<publisher name>"            # once
+# serve the dev server over https (e.g. a tunnel to port 7140), then:
+little domains add https://<host>
+# put the token it prints in public/.well-known/little-challenge (served by Vite)
+little domains verify https://<host>
+little dev --device vim4 --app-url https://<host>
+```
+
+Add the tunnel's hostname to `server.allowedHosts` in `vite.config.ts` so Vite answers it.
+
+On first launch the TV asks for the camera once; that one answer covers the camera picture
+and pose tracking.
 
 ## Manual steps (yours)
 
@@ -26,78 +76,55 @@ Node 22+ is required (Little's floor). Without the SDK installed, Vite aliases
 | GitHub token for the SDK | `@kabletv/little-sdk` lives on GitHub Packages | A token with `read:packages`: `export NODE_AUTH_TOKEN=$(gh auth token)` (or a classic PAT), then `npm install`. Already done on this Mac (0.39.1). |
 | Little CLI sign-in | simulator, devices, publishing | `little login`, then `little doctor`. Done on this Mac (tae@little.co). |
 | JDK 17+ | `little dev` runs a JVM runtime | Present here (OpenJDK 21). The simulator toolchain installs itself on the first `little dev`. |
-| Pair the TV | developer mode on the television | TV: Settings → Developer → Pair a computer. Mac: `little device pair <CODE> --name vim4`. |
+| Pair the TV | developer mode on the television | TV: Settings → Developer → Pair a computer. Mac: `little device pair <CODE> --name vim4`. Done (vim4). |
 | Allow `node` in the macOS firewall | the TV loads the game from this Mac | Accept the prompt the first time `little dev --device` runs. |
-| Publisher org + HTTPS origin | publishing (not needed for dev) | Create an org, deploy `npm run build` output to HTTPS, `little domains add/verify`, then `little publish --url <origin>`. |
+| Publisher org + verified https origin | the TV camera, and publishing | See "Run it on the TV" above. Not done yet. |
 | Blender 4.2+ | only for rebuilding assets | Installed at `~/Applications/Blender.app` (5.2), wrapper at `~/.local/bin/blender`. Elsewhere: set `BLENDER=/path/to/blender`. |
-
-## Run it on the TV
-
-```bash
-little device ls                 # paired televisions
-little dev --device vim4         # starts `npm run dev:tv`, opens the game on the TV, streams console
-```
-
-`little.config.json` runs `npm run dev:tv`, which listens on `0.0.0.0` so the TV can
-reach `http://<this-mac>:7140`. The CLI swaps `127.0.0.1` in the app URL for the Mac's LAN
-address. Nothing is installed on the TV. `adb` is not needed for this.
-
-## Controls
-
-The remote only guarantees six keys as `keydown` (Select and Back never repeat, `keyup` is
-undocumented), so every action works with taps alone. Hold-to-swing is a bonus when the
-host does deliver `keyup`.
-
-| Input | While swinging | In the air | Menus |
-|---|---|---|---|
-| **OK / Select** | tap: release (hold > 0.23 s and lift also releases) | tap: shoot a web at the highlighted anchor (pressed up to 0.18 s early still counts) | choose |
-| **Left / Right** | steer and lean into the turn; the web re-anchors through corners | steer, air-strafe, camera roll | move focus |
-| **Up** | reel in (speed boost) | glide | move focus |
-| **Down** | let out (swing lower) | dive | move focus |
-| **Back** | pause | pause | back / quit |
-
-Gamepad (`input.gamepad`): A = web toggle, RT/RB held = web, left stick steers and
-reels, B/Start = back. Keyboard for desktop: arrows or WASD, Enter/Space, Escape.
-
-Timing matters: releasing on the upswing, while you're moving forward and climbing, gives
-a **Perfect** boost and points. Releasing at the bottom or while falling just lets go. Hoops through the center score Bullseye. Consecutive hoops and coins
-build a combo multiplier up to ×5, and a crash, ground bonk or splash breaks it.
 
 ## Debug flags
 
 | URL flag | Effect |
 |---|---|
-| `?debug` | exposes `window.game`, logs city stats |
-| `?autopilot` | a bot flies the route (handy for profiling and screenshots) |
+| `?debug` | exposes `window.game`; on-screen motion readout (rate, latency, framing, per-arm reach/straightness/angle/power, armed state, learned arm length, lean) plus the last hit offsets |
+| `?keys` | desk testing without a camera: Q/E shoot left/right webs, A/D lean |
+| `?autoplay` | a bot plays every cue perfectly (`?autoplay=miss` drops every fourth) |
+| `?motionOffset=<ms>` | extra pose latency to subtract from shot times, if hits read consistently late on hardware |
+| `?accuracy=high` | ask the pose tracker for its high-accuracy mode |
 | `?quality=low\|medium\|high\|ultra` | lock a quality tier (default: adaptive, starts at medium) |
 | `?arms=custom` | the in-house blocky arms instead of the adapted PSX arms pack |
 | `?littleDebug` | SDK debug/inspector mode |
 
+On hardware, start with `?debug`: check the motion rate (aim for 25–30 Hz) and latency, then
+watch `pow` reach 1.00 as you punch. If shots don't fire, `str` (straightness) or `ang`
+(angle, 0° is out to the side, 90° is up) will say why.
+
 ## Performance
 
-Measured on the dev Mac during an autopilot run at the high tier: about 66 draw calls,
-about 190k triangles per frame including the shadow pass (233k peak), and about 1.2 ms
-CPU per frame. Static props are baked into 100 m city chunks so they cull with their
-block. Traffic is instanced and casts no shadows.
+Measured on the dev Mac at the high tier: about 66 draw calls, about 190k triangles per
+frame including the shadow pass, and about 1.2 ms CPU per frame. Static props are baked
+into 100 m city chunks so they cull with their block. Traffic is instanced and casts no
+shadows.
 
 On unknown TV GPUs the game starts at **medium** (0.75 render scale, 1024 shadow map) and
 steps up or down from measured frame times. The low tier drops shadows. When the host
-pauses the app the loop stops, and losing the WebGL context pauses the run. First thing
-to do on real hardware: log `WEBGL_debug_renderer_info` and frame times from
-`little dev --device` and tune the tiers.
+pauses the app the loop stops, and losing the WebGL context pauses the run. The camera
+picture is only held while a guide screen is up, so it costs nothing during play.
 
 ## Project layout
 
 ```
 src/
-  game/      game.ts (state machine, scoring, Little tools), player.ts (rope physics),
-             anchors.ts (web targeting), course.ts (hoops, coins, checkpoints)
-  view/      arms.ts (IK arms), cameraRig.ts, hud.ts, fx.ts (web line, particles)
+  game/      game.ts (state machine, get-ready steps, scoring, Little tools), subject.ts
+  input/     motion.ts (pose → web-shoot and lean gestures, framing checks)
+  rhythm/    song.ts (the chart), music.ts (synth + Conductor clock), judge.ts (timing
+             windows), route.ts (anchors and rails), dressing.ts (coins, girders, finish)
+  view/      bodyGuide.ts (camera mirror and pip), cueStyle.ts (icons, figures), lanes.ts,
+             cueMarkers.ts, hud.ts, arms.ts (IK arms that copy the player), cameraRig.ts, fx.ts
   world/     cityLayout.ts (the route), city.ts / buildings.ts (procedural blocks),
              props.ts (GLB loading), traffic.ts, sky.ts, palette.ts
-  core/      input.ts, quality.ts, audio.ts, math.ts
-  platform/  little.ts (SDK wrapper), little-stub.ts
-public/little/manifest.json   tools: start_run, pause_game, resume_game, restart_run, quit_game
+  core/      input.ts (menus and ?keys), quality.ts, audio.ts, math.ts
+  platform/  little.ts (SDK wrapper: motion, camera, tools), little-stub.ts
+public/little/manifest.json   capabilities: sense.motion, media.camera
 tools/blender/                headless Blender scripts (build, adapt, preview)
 tools/pipeline/               npm run assets: Blender → glTF-Transform → public/models
 assets-src/                   palette.json, third-party packs, editable .blend files

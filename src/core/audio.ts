@@ -39,6 +39,14 @@ export class Sfx {
     return !!this.ctx && this.ctx.state === "running";
   }
 
+  /** Shared with the music so everything runs on one clock and one mix. */
+  get context(): AudioContext | null {
+    return this.ctx;
+  }
+  get output(): AudioNode {
+    return this.master;
+  }
+
   private tone(freq: number, dur: number, type: OscillatorType, vol: number, at = 0, slideTo?: number) {
     const c = this.ctx!;
     const t = c.currentTime + at;
@@ -151,6 +159,26 @@ export class Sfx {
   countdown(go: boolean) {
     if (!this.ready) return;
     this.tone(go ? 1047 : 523, go ? 0.35 : 0.15, "square", 0.12);
+  }
+
+  /** Swish past an obstacle. */
+  whoosh() {
+    if (!this.ready) return;
+    this.burst(0.32, 0.4, "bandpass", 600, 3200, 1.1);
+  }
+
+  /** The auto web after a missed cue: duller than a real thwip. */
+  recover() {
+    if (!this.ready) return;
+    this.burst(0.14, 0.35, "bandpass", 1800, 500, 1.6);
+    this.tone(240, 0.12, "sine", 0.25, 0, 120);
+  }
+
+  /** Calibration step done. */
+  tick(step: number) {
+    if (!this.ready) return;
+    this.tone(660 * Math.pow(2, step / 6), 0.09, "triangle", 0.18);
+    this.tone(990 * Math.pow(2, step / 6), 0.12, "triangle", 0.14, 0.06);
   }
 
   /** Continuous wind bed; intensity 0..1 follows speed. */

@@ -13,7 +13,13 @@ export interface LittlePlatform {
   exit(): void;
   can(capability: string): boolean;
   setActiveTools(names: string[] | null): void;
+  /** Body-pose evidence stream (`sense.motion`); returns a closer. */
+  motion(handlers: sdk.MotionHandlers, options?: sdk.MotionOptions): () => void;
+  /** The live camera picture (`media.camera`), for showing players where they stand. */
+  camera(): Promise<CameraFeed>;
 }
+
+export type CameraFeed = { stream: MediaStream; stop(): void } | { stream: null; reason: string; stop(): void };
 
 declare const __LITTLE_STUB__: boolean;
 export const isStub = __LITTLE_STUB__;
@@ -44,5 +50,25 @@ export function connectLittle(): LittlePlatform {
     exit: () => void app.exit?.(),
     can: (c) => !!app.can?.(c),
     setActiveTools: (names) => void app.setActiveTools?.(names),
+    motion: (handlers, options) => {
+      if (!app.sense?.motion) {
+        handlers.onStatus?.({ state: "unavailable", reason: "no_host" });
+        return () => {};
+      }
+      const sub = app.sense.motion(handlers, options);
+      return () => sub.close();
+    },
+    camera: async () => {
+      const none = (reason: string): CameraFeed => ({ stream: null, reason, stop: () => {} });
+      if (!app.media?.camera || !app.can?.("media.camera")) return none("not_granted");
+      try {
+        const grant = await app.media.camera({ facing: "user", width: 640, height: 360, fps: 15 });
+        if (grant.ok) return { stream: grant.stream as MediaStream, stop: () => grant.stop() };
+        grant.stop?.();
+        return none(grant.error?.code ?? "unavailable");
+      } catch (e) {
+        return none(String(e));
+      }
+    },
   };
 }
