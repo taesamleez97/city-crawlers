@@ -7,12 +7,13 @@ Anything I couldn't confirm against the product page or the file itself is marke
 ## 1. First-person arms
 
 No store sells first-person web-shooter or swinging arms. Whichever pack you pick, plan
-to key the web-specific poses yourself (shoot web, hang loop, release, wave). The game's
-procedural IK covers reaching and swinging, so only static hand poses are strictly required.
+to key the web-specific poses yourself (hang loop, release, wave). The web-shooter hand
+itself exists under other names (see "The web-shooter hand" below). The game's procedural
+IK covers reaching and swinging, so only static hand poses are strictly required.
 
 | Pack | Price | License | Formats | Size | Rig and clips | Work to fit the look |
 |---|---|---|---|---|---|---|
-| **[PSX First Person Arms (Drillimpact)](https://drillimpact.itch.io/psx-first-person-arms-free)**, **in use** | Free | CC0 | FBX, GLB, Blend | 1.2k tris (measured after adapting) | Custom arms rig with finger bones; 17 clips: relax, push, jab, grab, guard, finger-gun, knife | Done: `tools/blender/adapt_arms_pack.py` recolors, re-rests and renames automatically |
+| **[PSX First Person Arms (Drillimpact)](https://drillimpact.itch.io/psx-first-person-arms-free)**, **in use** | Free | CC0 | FBX, GLB, Blend | 1.2k tris (measured after adapting) | Custom arms rig: shoulder, upper arm, forearm, hand, palm bones and 3 bones on every finger; 18 clips: relax, rest, push, jab, grab, guard, finger-gun, knife | Done: `tools/blender/adapt_arms_pack.py` recolors, re-rests and renames automatically |
 | [Low World Base Character (silverdelivery)](https://www.fab.com/listings/37262df1-8a7c-41ea-8e65-421f0110b92c) ([female](https://www.fab.com/listings/0a62b7f7-f9f9-4d55-a9ca-7ec0574b013a)) | $4.99 Personal / $5.99 Pro | Fab Standard | fbx, glb, blend | arms 1,112 faces, one 64×64 palette | Generic arms rig, 56 first-person clips (idle, walk, run, jump, attacks, "holding"); finger bones *unverified* | Low: recolor the palette. Web clips need authoring. |
 | [Low Poly FPS Arms (Oblix Studio)](https://www.fab.com/listings/6427a301-5358-462b-9fd3-3485691d7088) | $0.99 | Fab Standard | FBX only | 1,086 tris, 4 materials, no textures | Control rig with widget bones, visible finger articulation, 2 clips | Medium: merge materials, strip widgets, bake to deform bones, author clips. One 1-star review. |
 | [WRAD ARMS (wriks)](https://wriks.itch.io/wrad-arms) | Free | CC0 | GLB, FBX, OBJ | 1,200 tris, 512² texture | IK armature, no clips | Recolor and author all clips |
@@ -34,8 +35,48 @@ Grapple and web packs exist, but none are first-person arms: Kelint
 - Its grab and push clips map directly onto grip and open.
 - Side-by-side captures are in `previews/shots/arms-psx.jpg` and `arms-custom.jpg`.
 
-**Extra work flagged:** a dedicated "thwip" web-shooter hand pose and a two-handed pose,
-keyed in `assets-src/blender/arms-psx.blend`. Optionally, thicker fingers for couch distance.
+**Extra work flagged:** a two-handed pose, keyed in `assets-src/blender/arms-psx.blend`.
+Optionally, thicker fingers for couch distance. (The "thwip" hand is done, see below.)
+
+### The web-shooter hand
+
+The shape is middle and ring fingers curled to the palm, index, pinky and thumb out. Stores
+sell it as "Rock", "Horns" (usually thumb tucked), "Metal" or the "I love you" sign. It
+needs a rig with separate bones for each finger, ideally three.
+
+**In use:** the Drillimpact rig above already has every bone the gesture needs.
+`adapt_arms_pack.py` composes a `thwip_{L,R}` pose from the pack's own grab curl (middle and
+ring, pushed 25% further) and push pose (the rest). The game shows it as each web fires and
+while the player's real arm is punched out. Cost: nothing, and no new license.
+
+Assets that ship the gesture already:
+
+| Asset | Price | License | Formats | Size and rig | The pose | Fit |
+|---|---|---|---|---|---|---|
+| [Godot XR Tools hands](https://github.com/GodotVR/godot-xr-tools/tree/master/addons/godot-xr-tools/hands) | Free | [CC0](https://raw.githubusercontent.com/GodotVR/godot-xr-tools/master/addons/godot-xr-tools/hands/License.md) | glTF, `.blend` with poses as actions | 938 tris per hand (low-poly version); wrist, palm, 4 bones per finger. **Hands only.** | ["Metal"](https://godotvr.github.io/godot-xr-tools/docs/hand_poses/): exact match. Also "Horns" and "Surfer". | Best free pose source: retarget the action, or graft the hands onto other forearms. Semi-realistic, PBR. |
+| [Stylized Animated Hand, 6 Gestures (DoDoCorp)](https://www.fab.com/listings/b0d74ee5-5d4a-4d24-92b2-7fb254364aa2) | $7.99 Personal / $24.99 Pro | Fab Standard | FBX, GLB, `.blend` | About 5k tris, **one hand, no arm**, 3 bones per finger | "Rock" clip, thumb out: exact match | Weak: needs mirroring and an arm, smooth cartoon style, Fab extraction clause |
+| [First Person Hand Gesture Animations V.2 (ZaneIRL)](https://www.fab.com/listings/c6da12ba-fbcb-442a-9826-085806359001) | $10.99 / $20.99 | Fab Standard | **Unreal only** | First-person arms; skeleton *unverified* | `FP_UA_Rock`, `FP_LA_Rock`; thumb *unverified* | Needs the Unreal editor to export; realistic |
+| [VR Cartoon Hand (Object Null)](https://assetstore.unity.com/packages/3d/vr-cartoon-hand-65978) | $5.99 | Unity EULA | `.unitypackage` | Hands with a sleeve; finger bones *unverified* | "Rock" plus 25 more; thumb *unverified* | Hands only, Unity extraction step |
+
+Rigs where we'd author it (as we did on Drillimpact):
+
+| Asset | Price | License | Size and rig | Fit |
+|---|---|---|---|---|
+| [Quaternius Universal Base Characters](https://quaternius.com/packs/universalbasecharacters.html), "Superhero Male" arms | Free ($19.99 source) | CC0 | About 4.6k tris for both arms (cut from a 14k body); humanoid rig, 3 bones per finger plus tips | Best upgrade if we want superhero proportions. Smooth style: needs faceting, cropping and a new adapter preset. |
+| [Retro PSX Rigged First Person Arms (Comp-3)](https://comp3interactive.itch.io/retro-first-person-arms) | £2.99 | Custom, "not for resale"; games OK per the author | 685 tris; IK, a curl control per finger; bones per finger *unverified* | Lightest; very close to what we have |
+| [Stylized Hands VR/FPS (CC SAN)](https://www.fab.com/listings/ba532903-d345-4c0e-9dd7-f1b6eb2a1904) | $37.99 / $80.99 | Fab Standard | UE5 mannequin skeleton, full arms; dense; 4K painted textures | Poor fit for flat shading |
+
+Avoid: keyschain's Low Poly Arms Rig (CC BY-ND, no derivatives, so no recoloring) and
+INKXO's arms (non-commercial). Animation-only packs with the gesture exist too (Ailive
+Various Gesture Pack 2 on Fab, $3.99, `Sign_of_the_Horns_Gesture`; minus7media Handy Poses
+on Unity, $10, "Rock On"), but they're full-body humanoid clips that need retargeting.
+
+**Recommendation:** keep Drillimpact with the composed thwip pose. It's CC0, already in
+the pipeline, 1.2k faceted triangles that match the city, and the gesture reads. If we
+later want bigger, superhero-proportioned arms, take the Quaternius arms (CC0) and copy
+the Godot "Metal" pose onto them. None of the paid options beat that: the ones with a
+ready-made clip are single hands, Unreal-only or Unity-only, and come with Fab's
+extraction clause.
 
 ## 2. City packs
 
