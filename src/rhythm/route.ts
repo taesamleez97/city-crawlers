@@ -18,7 +18,7 @@ import { clamp, damp, dampAngle, smoothstep } from "../core/math";
 import { flightPitch } from "../view/cameraRig";
 import { BANNERS, FINISH, ROUTE, SKYBRIDGES, START } from "../world/cityLayout";
 import type { CollisionWorld } from "../world/collision";
-import { BEAT, type Cue, FINISH_BEAT, LEAP_BEAT, RESULTS_BEAT, type Side, buildChart, sectionAt } from "./song";
+import { BEAT, type Cue, FINISH_BEAT, LEAP_BEAT, RESULTS_BEAT, type Side, sectionAt } from "./song";
 
 const UP = new Vector3(0, 1, 0);
 const CORNER_RADIUS = 34;
@@ -38,8 +38,8 @@ export const BEAM_REACH = 1.5;
 const COIN_DROP = 1.6;
 
 /** Where a ring sits in the hero's view at its cue: radians toward the cue's side, and above the view. */
-const RING_YAW = 0.5;
-const RING_EL = 0.26;
+export const RING_YAW = 0.5;
+export const RING_EL = 0.26;
 /** Camera height over the rail (see CameraRig). */
 const EYE_Y = 0.3;
 const RING_NEAR = 14;
@@ -210,11 +210,11 @@ export class Route {
   private readonly tmpP = new Vector3();
   private readonly tmpT = new Vector3();
 
-  constructor(world: CollisionWorld) {
+  constructor(world: CollisionWorld, cues: Cue[]) {
     const poly: Array<[number, number]> = [[START.x, START.z], ...ROUTE.slice(1, -1), [FINISH.x, FINISH.z]];
     this.line = new Centerline(poly, CORNER_RADIUS);
     this.length = this.line.length;
-    this.cues = buildChart();
+    this.cues = cues;
 
     this.planSwings();
     const obstacles = this.planObstacles();

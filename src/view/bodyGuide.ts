@@ -3,8 +3,9 @@
 //
 //   - the live camera picture (when the host grants `media.camera`), mirrored
 //   - the tracked skeleton, arms in their cue colors, glowing when extended
-//   - a target ring per arm where the fist lands at full stretch, 45° up and out;
-//     it lights up as that side's cue approaches and bursts on a shot
+//   - a target ring per arm where the fist has to get to for a shot (up and out
+//     toward that arm's next ring); it fills as a loaded arm punches toward it,
+//     lights up as that side's cue approaches and bursts on a shot
 //   - an outline of the ideal spot while the framing is off, plus a coaching line
 //
 // Coordinates come from MotionInput's mirrored picture space, so the overlay
@@ -231,15 +232,24 @@ export class BodyGuide {
         g.stroke();
         g.restore();
       }
-      this.ring(tx, ty, k, focus[k], shot, arm.extended);
+      // Fills as a loaded arm punches toward it: full means the shot counted.
+      const charge = arm.ok && arm.armed ? Math.min(1, Math.max(0, arm.power)) : 0;
+      this.ring(tx, ty, k, focus[k], shot, arm.extended, charge);
     }
   }
 
-  private ring(x: number, y: number, k: number, focus: number, shot: number, lit: boolean) {
+  private ring(x: number, y: number, k: number, focus: number, shot: number, lit: boolean, charge = 0) {
     const { g, s } = this;
     const r = (this.opts.compact ? 30 : 26) * s;
     const color = SIDE_COLOR[k];
     g.save();
+    if (charge > 0.2 && !lit) {
+      g.globalAlpha = 0.6;
+      g.fillStyle = color;
+      g.beginPath();
+      g.arc(x, y, r * charge, 0, Math.PI * 2);
+      g.fill();
+    }
     if (focus > 0 || lit) {
       g.globalAlpha = lit ? 0.85 : 0.25 + focus * 0.5;
       g.fillStyle = color;

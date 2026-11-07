@@ -1,6 +1,6 @@
 import {
-  Color, DirectionalLight, Fog, HemisphereLight, type Mesh, NoToneMapping, PCFShadowMap, PerspectiveCamera, Scene,
-  SRGBColorSpace, Vector3, WebGLRenderer,
+  Color, DirectionalLight, Fog, HemisphereLight, type Material, type Mesh, NoToneMapping, PCFShadowMap, PerspectiveCamera,
+  Scene, SRGBColorSpace, Vector3, WebGLRenderer,
 } from "three";
 
 import { TUNING } from "../config";
@@ -8,13 +8,16 @@ import { Sfx } from "../core/audio";
 import { type Action, Input } from "../core/input";
 import { SpringScalar, clamp, damp } from "../core/math";
 import { QualityManager, type Tier } from "../core/quality";
-import { MotionInput } from "../input/motion";
+import { DEFAULT_AIM, MotionInput, aimToward } from "../input/motion";
 import type { CameraFeed, LittlePlatform } from "../platform/little";
 import { Dressing } from "../rhythm/dressing";
-import { type CueRt, Judge, type Judgment } from "../rhythm/judge";
+import { type CueRt, HAND_HOLD, Judge, type Judgment } from "../rhythm/judge";
 import { Conductor } from "../rhythm/music";
 import { BEAM_DELAY, DODGE_OFFSET, Route, newSample } from "../rhythm/route";
-import { BEAT, type CueKind, FINISH_BEAT, LEAP_BEAT, RESULTS_BEAT, type Side, sectionAt } from "../rhythm/song";
+import {
+  BEAT, type CueKind, FINISH_BEAT, LEAP_BEAT, LEVELS, type Level, type LevelId, RESULTS_BEAT, type Side, buildChart, levelById,
+  sectionAt,
+} from "../rhythm/song";
 import { ArmsView, type BodyArm } from "../view/arms";
 import { CameraRig } from "../view/cameraRig";
 import { LEFT_COLOR, RIGHT_COLOR, figureSvg } from "../view/cueStyle";
@@ -42,17 +45,31 @@ const RECOVERY_DELAY = 0.3;
 const PIP_SHOW_AFTER = 0.25;
 const PIP_HIDE_AFTER = 1.5;
 const NO_FOCUS: [number, number] = [0, 0];
+/** Accuracy that clears a level and opens the next one. */
+const CLEAR_ACCURACY = 0.6;
+const PROGRESS_KEY = "cc.progress";
+/** Seconds ahead an arm starts aiming at its next ring (about when the approach circle shows). */
+const AIM_LOOKAHEAD = 1.2;
+
+type Progress = { best: Record<LevelId, number>; cleared: number };
+type Course = { route: Route; judge: Judge; dressing: Dressing; cues: WorldCues; swingOfCue: Map<number, number> };
+const num = (v: unknown) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+};
 
 type StepId = "frame" | "stance" | "shootR" | "shootL" | "leanL" | "leanR";
 type Step = { id: StepId; label: string; hint: string; done: boolean };
 const STEPS: Array<Omit<Step, "done">> = [
   { id: "frame", label: "Find your spot", hint: "Back up until the box turns green. Your fists need room above your head." },
   { id: "stance", label: "Fists up by your shoulders", hint: "Your ready pose: it loads your web-shooters." },
-  { id: "shootR", label: `Shoot a web <b class="cr">RIGHT</b>`, hint: `Snap your right arm straight, up and out, at the <b class="cr">pink</b> ring.` },
-  { id: "shootL", label: `Shoot a web <b class="cl">LEFT</b>`, hint: `Pull back, then snap your left arm at the <b class="cl">blue</b> ring.` },
+  { id: "shootR", label: `Shoot a web <b class="cr">RIGHT</b>`, hint: `Punch your right arm up and out to the <b class="cr">pink</b> dot. No need to lock your elbow.` },
+  { id: "shootL", label: `Shoot a web <b class="cl">LEFT</b>`, hint: `Pull back, then punch your left arm out to the <b class="cl">blue</b> dot.` },
   { id: "leanL", label: `Lean <b class="co">LEFT</b>`, hint: "Shift your shoulders over to your left." },
   { id: "leanR", label: `Lean <b class="co">RIGHT</b>`, hint: "And over to your right." },
 ];
+const stepFor = (lv: Level, id: StepId) =>
+  id === "frame" || (lv.shoots && (id === "stance" || id === "shootR" || id === "shootL")) || (lv.leans && (id === "leanL" || id === "leanR"));
 const STEP_FIGURE: Record<StepId, Parameters<typeof figureSvg>[0]> = {
   frame: "frame", stance: "stance", shootR: "shootR", shootL: "shootL", leanL: "leanL", leanR: "leanR",
 };
@@ -82,26 +99,31 @@ export class Game {
   private readonly hemi = new HemisphereLight(pal("hemi_sky"), pal("hemi_ground"), 2.0);
   private readonly fog: Fog;
   private readonly city: CityData;
-  private readonly route: Route;
-  private readonly dressing: Dressing;
-  private readonly cues: WorldCues;
+  private readonly material: Material;
+  // The current level's course (see useLevel).
+  private level: Level = LEVELS[0];
+  private route!: Route;
+  private dressing!: Dressing;
+  private cues!: WorldCues;
+  private judge!: Judge;
+  private swingOfCue!: Map<number, number>;
+  private readonly courses = new Map<LevelId, Course>();
   private readonly traffic: Traffic;
   private readonly chunks: Mesh[] = [];
   private readonly input = new Input();
   private readonly sfx = new Sfx();
   private readonly conductor: Conductor;
   private readonly motion: MotionInput;
-  private readonly judge: Judge;
   private readonly quality = new QualityManager();
   private readonly rider = new Rider();
   private readonly smp = newSample();
   private readonly ahead = newSample();
-  private readonly swingOfCue = new Map<number, number>();
-  private readonly beamOfCue = new Map<number, number>();
+  /** Each arm's current aim, eased toward its next ring. */
+  private readonly aim = [{ ...DEFAULT_AIM }, { ...DEFAULT_AIM }];
 
   private state: State = "title";
   private stateT = 0;
-  private best = 0;
+  private progress: Progress = { best: { 1: 0, 2: 0, 3: 0 }, cleared: 0 };
   /** motion: the camera (the game). keys: ?keys desk testing. auto: ?autoplay. */
   private mode: "motion" | "keys" | "auto" = "motion";
   private last = performance.now();
@@ -152,7 +174,7 @@ export class Game {
 
   constructor(
     stage: HTMLElement,
-    lib: PropLibrary,
+    private readonly lib: PropLibrary,
     private readonly little: LittlePlatform,
     private readonly hud: Hud,
   ) {
@@ -171,6 +193,7 @@ export class Game {
     this.scene.background = new Color(horizon);
 
     const material = createWorldMaterial();
+    this.material = material;
     this.city = buildCity(material, (type) => lib.geometries.get(type));
     this.scene.add(this.city.group, this.sky.group);
     this.city.group.traverse((o) => {
@@ -181,14 +204,11 @@ export class Game {
       }
     });
 
-    this.route = new Route(this.city.world);
-    this.route.swings.forEach((w, i) => this.swingOfCue.set(w.cue.id, i));
-    this.route.beams.forEach((b, i) => this.beamOfCue.set(b.cue.id, i));
-    this.judge = new Judge(this.route.cues);
-    this.dressing = new Dressing(lib, material, this.route);
-    this.cues = new WorldCues(this.route);
+    this.loadProgress({});
+    const asked = levelById(Number(new URLSearchParams(location.search).get("level")));
+    this.useLevel(asked?.id ?? this.suggestedLevel());
     this.traffic = new Traffic(lib, material, this.city.lanes);
-    this.scene.add(this.dressing.group, this.cues.group, this.traffic.group, this.webLine.mesh, this.particles.mesh);
+    this.scene.add(this.traffic.group, this.webLine.mesh, this.particles.mesh);
 
     this.sun.castShadow = true;
     this.sun.shadow.camera.near = 1;
@@ -209,7 +229,6 @@ export class Game {
 
     if (this.debug) {
       console.info("[city]", this.city.stats);
-      console.info("[route]", JSON.stringify(this.route.describe()));
       (window as unknown as { game: Game }).game = this;
     }
     this.wirePlatform();
@@ -224,9 +243,12 @@ export class Game {
   // ------------------------------------------------------------------ platform
   private wirePlatform() {
     const L = this.little;
-    L.tool("start_run", () => {
+    L.tool("start_run", (args) => {
       if (this.state === "play" || this.state === "resuming") return { ok: false, detail: "A run is already in progress." };
-      this.startRun();
+      const lv = args.level === undefined ? this.level : levelById(Number(args.level));
+      if (!lv) return { ok: false, detail: `There is no level ${String(args.level)}: pick 1 to ${LEVELS.length}.` };
+      if (!this.unlocked(lv.id)) return { ok: false, detail: `${lv.name} is locked: clear ${LEVELS[lv.id - 2].name} first.` };
+      this.startRun(lv.id);
     });
     L.tool("pause_game", () => {
       if (this.state !== "play" && this.state !== "resuming") return { ok: false, detail: "Nothing to pause." };
@@ -252,12 +274,96 @@ export class Game {
       if (this.state === "play" || this.state === "resuming") this.pause();
     });
     L.onEnter(({ params, state }) => {
-      const saved = Number((state as { best?: unknown }).best ?? 0);
-      const local = Number(localStorage.getItem("cc.best") ?? 0);
-      this.best = Math.max(Number.isFinite(saved) ? saved : 0, Number.isFinite(local) ? local : 0);
-      if (this.state === "title") this.toTitle();
+      this.loadProgress(state);
+      const asked = levelById(Number(params.level));
+      if (this.state === "title") {
+        this.useLevel(asked && this.unlocked(asked.id) ? asked.id : this.suggestedLevel());
+        this.toTitle();
+      }
       if (params.start === true && this.state === "title") this.startRun();
     });
+  }
+
+  // ------------------------------------------------------------------ levels
+  /** Best scores and how far the player has got, from the host's saved state and this browser's. */
+  private loadProgress(state: unknown) {
+    const s = (state ?? {}) as { progress?: Partial<Progress>; best?: unknown };
+    let local: Partial<Progress> | null = null;
+    try {
+      local = JSON.parse(localStorage.getItem(PROGRESS_KEY) ?? "null") as Partial<Progress> | null;
+    } catch {
+      local = null;
+    }
+    const p = this.progress;
+    for (const src of [s.progress, local]) {
+      if (!src || typeof src !== "object") continue;
+      for (const lv of LEVELS) p.best[lv.id] = Math.max(p.best[lv.id], num(src.best?.[lv.id]));
+      p.cleared = Math.max(p.cleared, Math.min(LEVELS.length, num(src.cleared)));
+    }
+    // Before levels there was one song with everything in it: that's the full crawl, and it opens every level.
+    const legacy = Math.max(num(s.best), num(localStorage.getItem("cc.best")));
+    if (legacy > 0) {
+      p.best[3] = Math.max(p.best[3], legacy);
+      p.cleared = Math.max(p.cleared, 2);
+    }
+  }
+
+  private saveProgress() {
+    localStorage.setItem(PROGRESS_KEY, JSON.stringify(this.progress));
+    this.little.saveState({ progress: this.progress });
+  }
+
+  private unlocked(id: LevelId) {
+    return id <= this.progress.cleared + 1 || this.debug || !!this.autoplay || this.input.keys;
+  }
+
+  /** The first level not yet cleared, or the last one. */
+  private suggestedLevel(): LevelId {
+    return LEVELS.find((lv) => lv.id > this.progress.cleared && this.unlocked(lv.id))?.id ?? LEVELS[LEVELS.length - 1].id;
+  }
+
+  /** Switch the city's course to a level's chart (each is built once, on first use). */
+  private useLevel(id: LevelId) {
+    const lv = levelById(id)!;
+    if (this.route && this.level === lv) return;
+    if (this.route) this.scene.remove(this.dressing.group, this.cues.group);
+    let c = this.courses.get(id);
+    if (!c) {
+      const route = new Route(this.city.world, buildChart(lv));
+      c = {
+        route,
+        judge: new Judge(route.cues),
+        dressing: new Dressing(this.lib, this.material, route),
+        cues: new WorldCues(route),
+        swingOfCue: new Map(route.swings.map((w, i) => [w.cue.id, i])),
+      };
+      this.courses.set(id, c);
+      if (this.debug) console.info(`[route] level ${id}`, JSON.stringify(route.describe()));
+    }
+    this.level = lv;
+    ({ route: this.route, judge: this.judge, dressing: this.dressing, cues: this.cues, swingOfCue: this.swingOfCue } = c);
+    this.scene.add(c.dressing.group, c.cues.group);
+  }
+
+  private levelItem(lv: Level): MenuItem {
+    const locked = !this.unlocked(lv.id);
+    const prev = LEVELS[lv.id - 2];
+    const best = this.progress.best[lv.id];
+    const sub = locked ? `Clear ${prev.name} to unlock` : best > 0 ? `${lv.blurb} · best ${best.toLocaleString("en-US")}` : lv.blurb;
+    return {
+      id: `level${lv.id}`,
+      label: `Level ${lv.id}: ${lv.name}`,
+      html: `<span class="lvl-name"><i>${lv.id}</i>${lv.name}</span><small>${sub}</small>`,
+      locked,
+      action: "start_run",
+      onSelect: () => {
+        if (!locked) this.startRun(lv.id);
+        else {
+          this.sfx.ui("back");
+          this.hud.callout(`CLEAR ${prev.name.toUpperCase()} FIRST`, "info");
+        }
+      },
+    };
   }
 
   private setTools(names: string[]) {
@@ -281,13 +387,13 @@ export class Game {
     this.closeCamera();
     this.motion.close();
     const items: MenuItem[] = [
-      { id: "play", label: "Play", action: "start_run", onSelect: () => this.startRun() },
+      ...LEVELS.map((lv) => this.levelItem(lv)),
       { id: "quit", label: "Quit", action: "quit_game", onSelect: () => this.quit() },
     ];
     const note = this.input.keys
       ? "Desk test: <kbd>Q</kbd><kbd>E</kbd> webs, <kbd>A</kbd><kbd>D</kbd> leans"
       : this.little.can("sense.motion") ? "" : "City Crawlers needs the TV camera, which isn't available here.";
-    this.hud.showTitle(this.best, items, note);
+    this.hud.showTitle(items, note, this.level.id - 1);
     this.setTools(["start_run", "quit_game"]);
   }
 
@@ -323,11 +429,12 @@ export class Game {
     this.hud.showPip(on);
   }
 
-  /** Play → get ready: the camera mirror, finding your spot and a quick move tutorial, then the song. */
-  private startRun() {
+  /** Play → get ready: the camera mirror, finding your spot and a quick tutorial of this level's moves, then the song. */
+  private startRun(level: LevelId = this.level.id) {
     this.sfx.unlock();
     this.hud.close();
     this.conductor.stop();
+    this.useLevel(level);
     this.resetRun();
     this.placeRider(0, 0);
     this.rig.snap(this.rider);
@@ -342,7 +449,7 @@ export class Game {
     this.readyStep = 0;
     this.readyDoneAt = -1;
     this.stanceT = 0;
-    this.steps = STEPS.map((s) => ({ ...s, done: false }));
+    this.steps = STEPS.filter((s) => stepFor(this.level, s.id)).map((s) => ({ ...s, done: false }));
     this.setTools(["start_run", "quit_game"]);
     if (this.autoplay) {
       this.beginPlay();
@@ -382,7 +489,7 @@ export class Game {
       .map((s, i) => `<li class="${s.done ? "done" : i === this.readyStep ? "cur" : ""}">${s.label}</li>`)
       .join("");
     this.hud.showGuide({
-      title: "GET READY",
+      title: `LEVEL ${this.level.id}: ${this.level.name.toUpperCase()}`,
       side: `${now}<ol class="steps">${list}</ol>`,
       footer: "<kbd>OK</kbd> skip the tutorial &nbsp; <kbd>BACK</kbd> title",
       data: { steps: this.steps.map((s) => ({ step: s.label.replace(/<[^>]+>/g, ""), done: s.done })) },
@@ -438,8 +545,8 @@ export class Game {
   /** A shot outside the song (tutorial): the sound and the 3D arm, no web. */
   private thwipFeedback(side: Side) {
     this.sfx.thwip();
-    this.arms.onAttach(side);
-    setTimeout(() => this.arms.onRelease(), 250);
+    this.arms.puff(side);
+    this.arms.flick(side);
   }
 
   /** Which targets to light in the camera view during setup. */
@@ -465,16 +572,25 @@ export class Game {
     this.stateT = 0;
     this.hud.showRunHud(true);
     this.hud.setStats(0, 0, 1, 1);
-    this.hud.setHint(
-      this.mode === "motion"
-        ? `<span>Punch at each ring <b>as its outer circle closes</b></span><span><b class="cl">Blue</b> left arm, <b class="cr">pink</b> right</span><span>Lean where the <b class="co">arrows</b> point</span>`
-        : this.mode === "keys"
-          ? `<span><kbd>Q</kbd><kbd>E</kbd>webs</span><span><kbd>A</kbd><kbd>D</kbd>leans</span>`
-          : null,
-    );
+    this.hud.setHint(this.levelHint());
+    this.resetAim();
     this.conductor.start(-0.3);
     this.setTools(["pause_game", "restart_run", "quit_game"]);
-    this.little.emit("run_started", { input: this.mode, cues: this.judge.rts.length });
+    this.little.emit("run_started", { level: this.level.id, input: this.mode, cues: this.judge.rts.filter((rt) => !rt.cue.auto).length });
+  }
+
+  /** What to do in this level, shown over the opening bars. */
+  private levelHint() {
+    const lv = this.level;
+    const name = `<span>Level ${lv.id}: <b>${lv.name}</b></span>`;
+    if (this.mode === "keys") {
+      return name + (lv.shoots ? `<span><kbd>Q</kbd><kbd>E</kbd>webs</span>` : "") + (lv.leans ? `<span><kbd>A</kbd><kbd>D</kbd>leans</span>` : "");
+    }
+    if (this.mode !== "motion") return null;
+    const shoot = `<span>Punch at each ring <b>when its circle locks on</b>: <b class="cl">blue</b> left, <b class="cr">pink</b> right</span>`;
+    const lean = `<span>Lean where the <b class="co">arrows</b> point</span>`;
+    if (!lv.shoots) return `${name}<span>Your webs fire themselves</span>${lean}`;
+    return name + shoot + (lv.leans ? lean : "");
   }
 
   private pause(forTracking = false) {
@@ -589,37 +705,48 @@ export class Game {
     const grade = acc >= 0.95 ? "S" : acc >= 0.85 ? "A" : acc >= 0.7 ? "B" : acc >= 0.55 ? "C" : "D";
     const stars = acc >= 0.85 ? 3 : acc >= 0.65 ? 2 : 1;
     const final = j.score;
-    const newBest = final > this.best;
-    if (newBest) {
-      this.best = final;
-      localStorage.setItem("cc.best", String(final));
-      this.little.saveState({ best: final });
-    }
+    const lv = this.level;
+    const next = levelById(lv.id + 1);
+    const p = this.progress;
+    const cleared = acc >= CLEAR_ACCURACY;
+    const opened = cleared && !!next && !this.unlocked(next.id);
+    const newBest = final > p.best[lv.id];
+    if (newBest) p.best[lv.id] = final;
+    if (cleared) p.cleared = Math.max(p.cleared, lv.id);
+    if (newBest || cleared) this.saveProgress();
     this.hud.showRunHud(false);
     this.setPip(false);
     this.hud.setHint(null);
     this.hud.setPrompt(null);
     this.motion.close();
     const n = (v: number) => v.toLocaleString("en-US");
+    const rows: Array<[string, string]> = [
+      ["Accuracy", `${(acc * 100).toFixed(1)}%`],
+      ["Max combo", n(j.maxCombo)],
+      ["Perfect · Great · Good", `${j.counts.perfect} · ${j.counts.great} · ${j.counts.good}`],
+      ["Missed", n(j.counts.miss)],
+    ];
+    if (lv.leans) rows.push(["Dodge coins", n(this.coins)]);
+    const items: MenuItem[] = [
+      { id: "again", label: "Play again", action: "start_run", onSelect: () => this.startRun() },
+      { id: "title", label: "Title", action: "quit_game", onSelect: () => this.toTitle() },
+    ];
+    if (next && this.unlocked(next.id)) {
+      items.unshift({ id: "next", label: `Next: ${next.name}`, action: "start_run", onSelect: () => this.startRun(next.id) });
+    }
+    const pct = Math.round(CLEAR_ACCURACY * 100);
     this.hud.showResults(
       {
-        score: final, best: this.best, newBest, stars, grade,
-        rows: [
-          ["Accuracy", `${(acc * 100).toFixed(1)}%`],
-          ["Max combo", n(j.maxCombo)],
-          ["Perfect · Great · Good", `${j.counts.perfect} · ${j.counts.great} · ${j.counts.good}`],
-          ["Missed", n(j.counts.miss)],
-          ["Dodge coins", n(this.coins)],
-        ],
+        heading: cleared ? `${lv.name.toUpperCase()} CLEARED` : "ROUTE COMPLETE",
+        score: final, best: p.best[lv.id], newBest, stars, grade, rows,
+        note: opened ? `${next!.name} unlocked!` : !cleared && next && !this.unlocked(next.id) ? `Hit ${pct}% accuracy to unlock ${next.name}` : undefined,
       },
-      [
-        { id: "again", label: "Play again", action: "start_run", onSelect: () => this.startRun() },
-        { id: "title", label: "Title", action: "quit_game", onSelect: () => this.toTitle() },
-      ],
+      items,
     );
     this.setTools(["start_run", "quit_game"]);
     this.little.emit("run_finished", {
-      score: final, grade, stars, accuracy: Math.round(acc * 1000) / 10, maxCombo: j.maxCombo, ...j.counts, input: this.mode,
+      level: lv.id, cleared, score: final, grade, stars, accuracy: Math.round(acc * 1000) / 10, maxCombo: j.maxCombo, ...j.counts,
+      input: this.mode,
     });
   }
 
@@ -647,11 +774,13 @@ export class Game {
       if (this.state !== "ready") this.motion.drain();
       return;
     }
-    if (this.mode === "keys") for (const p of presses) this.onPress(p.kind, p.side, p.time);
+    // In the dodge level the hero fires its own webs: arm punches aren't inputs.
+    if (this.mode === "keys") for (const p of presses) if (p.kind === "lean" || this.level.shoots) this.onPress(p.kind, p.side, p.time);
     for (const e of this.motion.drain()) {
       if (this.mode !== "motion") continue;
-      if (e.type === "shoot") this.onPress("hand", e.side, e.t);
-      else if (e.type === "lean") {
+      if (e.type === "shoot") {
+        if (this.level.shoots) this.onPress("hand", e.side, e.t);
+      } else if (e.type === "lean") {
         const hit = this.onPress("lean", e.side, e.t);
         this.leanHeld = hit ? null : { side: e.side, since: this.conductor.songTime(e.t) };
       } else this.leanHeld = null;
@@ -699,9 +828,28 @@ export class Game {
   }
 
   private onPress(kind: CueKind, side: Side, perfTime: number): boolean {
-    const j = this.judge.input(kind, side, this.conductor.songTime(perfTime));
+    const t = this.conductor.songTime(perfTime);
+    const j = this.judge.input(kind, side, t);
+    // Every web that registers flares at the wrist at once, so the player knows the punch counted.
+    if (kind === "hand") this.arms.puff(side);
     if (j) this.onJudged(j);
+    else if (kind === "hand") this.whiff(side, t);
     return !!j;
+  }
+
+  /** A web that registered but had no ring to hit: still a shot, and the ring it was meant for says why. */
+  private whiff(side: Side, t: number) {
+    this.sfx.thwip();
+    this.arms.flick(side);
+    let mine: CueRt | null = null, other: CueRt | null = null;
+    for (const rt of this.judge.rts) {
+      if (rt.time > t + 1.5) break;
+      if (rt.state !== "pending" || rt.cue.auto || rt.cue.kind !== "hand") continue;
+      if (rt.cue.side === side) mine ??= rt;
+      else if (Math.abs(rt.time - t) < HAND_HOLD + 0.1) other ??= rt;
+    }
+    if (other && (!mine || Math.abs(other.time - t) < mine.time - t)) this.cues.nudge(other, "OTHER ARM");
+    else if (mine && mine.time > t) this.cues.nudge(mine, "EARLY");
   }
 
   // ------------------------------------------------------------------ judgments
@@ -881,6 +1029,14 @@ export class Game {
       if (rt.time > this.graceUntil) break;
       if (rt.state === "pending") this.skipCue(rt);
     }
+    // Webs the hero fires by itself go off on the beat.
+    for (const rt of this.judge.rts) {
+      if (rt.time > song) break;
+      if (rt.state === "pending" && rt.cue.auto) {
+        this.skipCue(rt);
+        this.sfx.thwip();
+      }
+    }
     // A lean already held when its beat arrives still counts.
     if (this.leanHeld) {
       for (const rt of this.judge.rts) {
@@ -946,8 +1102,38 @@ export class Game {
 
     // Motion players who walk out of view get a pause, not a wall of misses.
     if (this.mode === "motion") {
+      this.updateAim(song, dt);
       this.lostFor = this.motion.tracking ? 0 : this.lostFor + dt;
       if (this.lostFor > LOST_PAUSE_AFTER && beat > 2) this.pause(true);
+    }
+  }
+
+  /**
+   * Point each arm's next shot at its ring as it comes up: a ring nearer the middle of
+   * the view or lower down needs a shorter punch, one further out or higher a longer one.
+   */
+  private updateAim(song: number, dt: number) {
+    for (const k of [0, 1] as const) {
+      const side: Side = k === 0 ? -1 : 1;
+      let goal = DEFAULT_AIM;
+      for (const rt of this.judge.rts) {
+        if (rt.time > song + AIM_LOOKAHEAD) break;
+        if (rt.state !== "pending" || rt.cue.auto || rt.cue.kind !== "hand" || rt.cue.side !== side) continue;
+        const p = this.camera.worldToLocal(this.tmp.copy(this.route.swings[this.swingOfCue.get(rt.cue.id)!].anchor));
+        if (p.z < -1) goal = aimToward(Math.atan2(p.x * side, -p.z), Math.atan2(p.y, Math.hypot(p.x, p.z)));
+        break;
+      }
+      const a = this.aim[k];
+      a.out = damp(a.out, goal.out, 8, dt);
+      a.up = damp(a.up, goal.up, 8, dt);
+      this.motion.setAim(k, a.out, a.up);
+    }
+  }
+
+  private resetAim() {
+    for (const k of [0, 1] as const) {
+      Object.assign(this.aim[k], DEFAULT_AIM);
+      this.motion.setAim(k, DEFAULT_AIM.out, DEFAULT_AIM.up);
     }
   }
 
@@ -1036,7 +1222,7 @@ export class Game {
   private autoplayInputs(song: number, now: number) {
     for (const rt of this.judge.rts) {
       if (rt.time > song) break;
-      if (rt.state !== "pending") continue;
+      if (rt.state !== "pending" || rt.cue.auto) continue;
       if (this.autoplay === "miss" && rt.cue.id % 4 === 1) continue;
       this.onPress(rt.cue.kind, rt.cue.side, now - (song - rt.time) * 1000);
     }

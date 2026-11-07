@@ -500,7 +500,7 @@ kbd {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 22px;
+  gap: 18px;
   animation: slidein 0.6s ease-out both;
 }
 .logo {
@@ -509,8 +509,8 @@ kbd {
   color: #fff;
 }
 .logo.big {
-  font-size: 150px;
-  -webkit-text-stroke-width: 18px;
+  font-size: 112px;
+  -webkit-text-stroke-width: 15px;
   text-shadow: 0 12px 0 var(--ink);
   color: var(--gold);
 }
@@ -560,6 +560,43 @@ kbd {
 }
 .btn.focused::before {
   content: "▶ ";
+}
+/* Level buttons: name, then a line of detail (best score, or what unlocks it). */
+.menu-slot.levels .menu {
+  gap: 14px;
+}
+.btn.rich {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 10px 36px 12px;
+  font-size: 38px;
+}
+.btn.rich.focused::before {
+  content: none;
+}
+.btn.rich.focused .lvl-name::before {
+  content: "▶ ";
+}
+.btn.rich .lvl-name i {
+  font-style: normal;
+  margin-right: 16px;
+  opacity: 0.45;
+}
+.btn.rich small {
+  font-family: "Fredoka", system-ui, sans-serif;
+  font-size: 24px;
+  font-weight: 600;
+  opacity: 0.72;
+}
+.btn.locked {
+  background: #c9cde0;
+  color: rgba(29, 34, 68, 0.55);
+  box-shadow: 0 10px 0 #9aa0bb;
+}
+.btn.locked.focused {
+  background: #dfe2ef;
+  box-shadow: 0 10px 0 #9aa0bb, 0 0 0 8px #fff;
 }
 .controls {
   display: grid;

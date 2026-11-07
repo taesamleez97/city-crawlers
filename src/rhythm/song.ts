@@ -23,6 +23,8 @@ export interface Cue {
   beat: number;
   kind: CueKind;
   side: Side;
+  /** A web the hero fires by itself (the dodge level): no ring, no score. */
+  auto?: boolean;
 }
 
 export interface Section {
@@ -35,7 +37,7 @@ export interface Section {
 export const SECTIONS: Section[] = [
   { name: "Get ready", bar: 0, pace: 1 },
   { name: "Main Ave", bar: 2, pace: 0.85 },
-  { name: "Lean in", bar: 10, pace: 1 },
+  { name: "Midtown", bar: 10, pace: 1 },
   { name: "Canal St", bar: 18, pace: 1.1 },
   { name: "Tower Ave", bar: 26, pace: 1.2 },
   { name: "Finish", bar: 30, pace: 1 },
@@ -47,34 +49,104 @@ export function sectionAt(beat: number): Section {
   return s;
 }
 
+// Three levels on the same song and route, one move at a time: webs, then
+// dodging (the hero fires its own webs), then both, mixed in gradually. Any two
+// cues are at least two beats apart, so each gesture has room.
+//
 // One string per bar from bar 2, one character per beat:
-// L / R = left / right hand (web), < / > = lean left / right, . = rest.
+// L / R = left / right web, l / r = a web the hero fires by itself,
+// < / > = lean left / right, . = rest.
 // Corner swings are flipped to the inside of the turn by the route builder.
 const CHART_START_BAR = 2;
-const CHART = [
-  // Main Ave: webs only, one per bar, then two.
-  "R...", "L...", "R...", "L...",
-  "R.L.", "R.L.", "R.L.", "R...",
-  // Leans join in, one in the middle of each swing.
-  "L.>.", "R.<.", "L.<.", "R.>.",
-  "L.>.", "R.<.", "L...", "R.<.",
-  // Canal St: quicker swings with leans between.
-  "L.R.", ">.<.", "L.R.", "L.R.",
-  "L>R.", "<.>.", "L.R.", "L.>.",
-  // Tower Ave: the big finish.
-  "R.L.", "R<L>", "R.L.", "R.L.",
+
+export type LevelId = 1 | 2 | 3;
+
+export interface Level {
+  id: LevelId;
+  name: string;
+  /** One line for the menu and the announcer. */
+  blurb: string;
+  /** What the player does here (drives the tutorial steps and hints). */
+  shoots: boolean;
+  leans: boolean;
+  chart: string[];
+}
+
+export const LEVELS: Level[] = [
+  {
+    id: 1,
+    name: "Web Shooter",
+    blurb: "Shoot a web at every ring",
+    shoots: true,
+    leans: false,
+    chart: [
+      // Main Ave: one web a bar, alternating arms, then two.
+      "R...", "L...", "R...", "L...",
+      "R...", "L...", "R.L.", "R.L.",
+      // Midtown: two a bar.
+      "R.L.", "R.L.", "R.L.", "R...",
+      "L.R.", "L.R.", "L.R.", "L...",
+      // Canal St
+      "R.L.", "R.L.", "R.L.", "R.L.",
+      "L.R.", "L.R.", "L.R.", "L.R.",
+      // Tower Ave
+      "R.L.", "R.L.", "R.L.", "R...",
+    ],
+  },
+  {
+    id: 2,
+    name: "Dodge",
+    blurb: "Your webs fire themselves: lean round the girders",
+    shoots: false,
+    leans: true,
+    chart: [
+      // Main Ave: watch the swing, then a girder every other bar.
+      "r...", "l...", "r...", "l.>.",
+      "r...", "l.<.", "r...", "l.>.",
+      // Midtown: a girder every bar.
+      "r.<.", "l.>.", "r.<.", "l.>.",
+      "r.>.", "l.<.", "r.>.", "l.<.",
+      // Canal St: two a bar.
+      "r.<.", "l.>.", "r<.>", "l>.<",
+      "r.<.", "l.>.", "r<.>", "l>.<",
+      // Tower Ave
+      "r.<.", "l.>.", "r.<.", "l...",
+    ],
+  },
+  {
+    id: 3,
+    name: "Full Crawl",
+    blurb: "Webs and girders together",
+    shoots: true,
+    leans: true,
+    chart: [
+      // Main Ave: webs first.
+      "R...", "L...", "R...", "L...",
+      "R.L.", "R.L.", "R.L.", "R...",
+      // Midtown: a girder in the middle of each swing.
+      "L.>.", "R.<.", "L.<.", "R.>.",
+      "L.>.", "R.<.", "L...", "R.<.",
+      // Canal St: quicker swings with girders between.
+      "L.R.", ">.<.", "L.R.", "L.R.",
+      "L.>.", "R.<.", "L.R.", "L.>.",
+      // Tower Ave: the big finish.
+      "R.L.", "R.>.", "L.<.", "R.L.",
+    ],
+  },
 ];
 
-export function buildChart(): Cue[] {
+export const levelById = (id: number): Level | undefined => LEVELS.find((l) => l.id === id);
+
+export function buildChart(level: Level): Cue[] {
   const cues: Cue[] = [];
-  CHART.forEach((bar, i) => {
+  level.chart.forEach((bar, i) => {
     for (let k = 0; k < bar.length; k++) {
       const ch = bar[k];
       if (ch === ".") continue;
       const beat = (CHART_START_BAR + i) * BEATS_PER_BAR + k;
-      const kind: CueKind = ch === "L" || ch === "R" ? "hand" : "lean";
-      const side: Side = ch === "L" || ch === "<" ? -1 : 1;
-      cues.push({ id: cues.length, beat, kind, side });
+      const web = "LRlr".includes(ch);
+      const side: Side = ch === "L" || ch === "l" || ch === "<" ? -1 : 1;
+      cues.push({ id: cues.length, beat, kind: web ? "hand" : "lean", side, auto: ch === "l" || ch === "r" || undefined });
     }
   });
   return cues;

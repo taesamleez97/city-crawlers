@@ -1,6 +1,7 @@
 import {
-  type Bone, DirectionalLight, Group, HemisphereLight, type Interpolant, type KeyframeTrack, MathUtils, Mesh,
-  MeshLambertMaterial, type Object3D, PerspectiveCamera, Quaternion, Scene, Vector3,
+  AdditiveBlending, type Bone, CanvasTexture, DirectionalLight, Group, HemisphereLight, type Interpolant, type KeyframeTrack,
+  MathUtils, Mesh, MeshLambertMaterial, type Object3D, PerspectiveCamera, Quaternion, SRGBColorSpace, Scene, Sprite,
+  SpriteMaterial, Vector3,
 } from "three";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
@@ -13,6 +14,8 @@ type PoseName = "relax" | "grip" | "open" | "thwip";
 const POSES: PoseName[] = ["relax", "grip", "open", "thwip"];
 /** How long the web-shooter hand holds after a web fires, before it closes on the line. */
 const THWIP_HOLD = 0.28;
+/** Lifetime of the flare at the wrist when a shot registers, seconds. */
+const PUFF_LIFE = 0.24;
 const ARMS_FOV = 58;
 
 const v1 = new Vector3(), v2 = new Vector3(), v3 = new Vector3(), v4 = new Vector3(), v5 = new Vector3();
@@ -20,6 +23,32 @@ const q1 = new Quaternion(), q2 = new Quaternion(), q3 = new Quaternion();
 const X_AXIS = new Vector3(1, 0, 0);
 /** Shoulders sit a little ahead of and below the eye. */
 const ROOT_OFFSET = new Vector3(0, -0.02, -0.06);
+
+/** A white starburst: the web-shooter going off. */
+function puffTexture() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const g = c.getContext("2d")!;
+  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 40);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.45, "rgba(255,255,255,0.6)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  g.strokeStyle = "rgba(255,255,255,0.95)";
+  g.lineCap = "round";
+  g.lineWidth = 7;
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + 0.2;
+    g.beginPath();
+    g.moveTo(64 + Math.cos(a) * 30, 64 + Math.sin(a) * 30);
+    g.lineTo(64 + Math.cos(a) * 58, 64 + Math.sin(a) * 58);
+    g.stroke();
+  }
+  const t = new CanvasTexture(c);
+  t.colorSpace = SRGBColorSpace;
+  return t;
+}
 
 /** A track's first key, through its interpolant: cubic-spline keys store in-tangent, value, out-tangent. */
 function firstKey(track: KeyframeTrack) {
@@ -138,6 +167,10 @@ export class ArmsView {
   private t = 0;
   private lastVel = new Vector3();
   private readonly body: Record<Side, BodyArm | null> = { L: null, R: null };
+  /** Seconds since each arm's last shot flick and wrist flare. */
+  private readonly flickT: Record<Side, number> = { L: 9, R: 9 };
+  private readonly puffT: Record<Side, number> = { L: 9, R: 9 };
+  private readonly puffs: Record<Side, Sprite>;
   /** Hand position of the web-holding arm, in arms-camera NDC (for the web line). */
   readonly handNdc = new Vector3();
 
@@ -158,6 +191,25 @@ export class ArmsView {
       arm.target.snap(this.restTarget(arm, 0));
       arm.grip.value = 0;
     }
+    const puffMap = puffTexture();
+    const puff = () => {
+      const s = new Sprite(new SpriteMaterial({ map: puffMap, blending: AdditiveBlending, depthTest: false, depthWrite: false, transparent: true }));
+      s.renderOrder = 30;
+      s.visible = false;
+      this.scene.add(s);
+      return s;
+    };
+    this.puffs = { L: puff(), R: puff() };
+  }
+
+  /** A shot registered: the web-shooter flares at the wrist, whether or not it hit anything. */
+  puff(side: number) {
+    this.puffT[side > 0 ? "R" : "L"] = 0;
+  }
+
+  /** The web-shooter hand snaps out for a shot that missed, without letting go of a held web. */
+  flick(side: number) {
+    this.flickT[side > 0 ? "R" : "L"] = 0;
   }
 
   setAspect(aspect: number) {
@@ -221,6 +273,8 @@ export class ArmsView {
   update(dt: number, player: Subject, mainCamera: PerspectiveCamera, sunDirWorld: Vector3) {
     this.t += dt;
     this.gestureT += dt;
+    this.flickT.L += dt;
+    this.flickT.R += dt;
     const speed = player.speed;
 
     // Light the arms like the world: sun direction expressed in camera space.
@@ -249,7 +303,7 @@ export class ArmsView {
       if (body && !isActive) {
         // A fist while loaded; the web-shooter hand forms as the real arm punches out.
         target = this.bodyTarget(body, arm.sx);
-        const out = clamp((body.reach - 0.6) / 0.35, 0, 1);
+        const out = clamp((body.reach - 0.4) / 0.3, 0, 1);
         grip = 1 - out;
         thwip = out;
         wrist = 0.1 + out * 0.6;
@@ -268,6 +322,12 @@ export class ArmsView {
         // Free arm counterbalances the swing: low and back.
         target.set(arm.sx * 0.25, -0.3, -0.4);
         grip = 0.35;
+      }
+      if (this.flickT[side] < THWIP_HOLD && !isActive) {
+        if (!body) target.set(arm.sx * 0.3, 0.06, -0.62);
+        grip = 0;
+        thwip = 1;
+        wrist = 0.85;
       }
 
       if (!body && isGesture && this.gesture === "release" && this.gestureT < 0.35) {
@@ -299,10 +359,26 @@ export class ArmsView {
       arm.solve(arm.target.value, v4.set(arm.sx * 0.8, -1, 0.35));
     }
 
+    this.root.updateMatrixWorld(true);
     const holding = this.activeSide ? this.arms[this.activeSide] : null;
-    if (holding) {
-      this.root.updateMatrixWorld(true);
-      holding.hand.getWorldPosition(this.handNdc).project(this.camera);
+    if (holding) holding.hand.getWorldPosition(this.handNdc).project(this.camera);
+    this.updatePuffs(dt);
+  }
+
+  /** Flares just past each wrist, toward the fingers. */
+  private updatePuffs(dt: number) {
+    for (const side of ["L", "R"] as Side[]) {
+      const s = this.puffs[side];
+      const k = (this.puffT[side] += dt) / PUFF_LIFE;
+      s.visible = k < 1;
+      if (!s.visible) continue;
+      const arm = this.arms[side];
+      const hand = arm.hand.getWorldPosition(v1);
+      const along = arm.fore.getWorldPosition(v2).sub(hand).normalize().multiplyScalar(-0.07);
+      s.position.copy(hand).add(along);
+      s.scale.setScalar(0.06 + 0.13 * Math.sqrt(k));
+      s.material.opacity = 1 - k * k;
+      s.material.rotation = arm.sx * k * 0.8;
     }
   }
 

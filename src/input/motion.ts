@@ -6,14 +6,17 @@
 // player's own body (torso and arm length), so it works near the screen or
 // across the room.
 //
-//   shoot: the web-shooter. An arm that was pulled in snaps out straight, up and
-//          out to its own side. Holding it out does nothing; pull back to reload.
+//   shoot: the web-shooter. An arm that was pulled in punches out, up and out
+//          to its own side, as far as its target (the ring it is shooting at).
+//          A nearer target needs a shorter punch; nothing needs a locked elbow.
+//          Holding it out does nothing; pull back to reload.
 //   lean:  the shoulders shift sideways over the hips.
 //
 // It also judges the framing (can the camera follow both fists at full
 // stretch?) so the UI can coach the player into place.
 
 import type { LittlePlatform } from "../platform/little";
+import { RING_EL, RING_YAW } from "../rhythm/route";
 import type { Side } from "../rhythm/song";
 
 type Handlers = Parameters<LittlePlatform["motion"]>[0];
@@ -37,20 +40,29 @@ const INDEX = new Map<string, number>(LANDMARKS.map((n, i) => [n, i]));
 const [LS, RS, LE, RE, LW, RW, LH, RH] = [5, 6, 7, 8, 9, 10, 11, 12];
 
 const MIN_CONFIDENCE = 0.3;
-/** A shot: the wrist reaches this share of the arm's length… */
-const SHOOT_REACH = 0.8;
-/** …with the elbow this straight (shoulder→wrist over shoulder→elbow→wrist)… */
-const SHOOT_STRAIGHT = 0.9;
+/** Where a web aims when no ring is up: 45° up and out, at a comfortable punch (arm lengths). */
+export const DEFAULT_AIM = { out: 0.5, up: 0.5 };
+/** A shot: the wrist gets this share of the way to its target's distance from the shoulder… */
+const SHOOT_OF_TARGET = 0.9;
+/** …but never less or more than this (arm lengths)… */
+const NEED_MIN = 0.5;
+const NEED_MAX = 0.8;
+/** …with the elbow opened past a right angle (shoulder→wrist over shoulder→elbow→wrist)… */
+const SHOOT_STRAIGHT = 0.7;
 /** …pointing between a little below straight out and a little past straight up (radians). */
 const AIM_MIN = -0.5;
 const AIM_MAX = 2.0;
-/** The arm must come back in (bent or pulled close) before it can shoot again. */
-const REARM_REACH = 0.62;
-const REARM_STRAIGHT = 0.8;
+/** The arm must come back in (pulled close, or bent) before it can shoot again. */
+const REARM_OF_NEED = 0.75;
+const REARM_STRAIGHT = 0.55;
 /** Wrist out of the picture (thrown high): the upper arm at this share of its length counts. */
 const ELBOW_REACH = 0.85;
-/** Where coaching puts the fists: full stretch, 45° up and out. */
-const TARGET_ANGLE = Math.PI / 4;
+/** Framing checks the fists at full stretch, 45° up and out. */
+const FRAME_ANGLE = Math.PI / 4;
+/** Recent segment lengths kept for the arm-length estimate (about ten seconds). */
+const ARM_SAMPLES = 300;
+/** The viewer sees their own shoulder about here from the hero's eye: radians toward the arm's side, and up. */
+const EYE_SHOULDER = { yaw: 0.1, el: -0.4 };
 const LEAN_ON = 0.16;
 const LEAN_OFF = 0.08;
 const LOST_AFTER_MS = 700;
@@ -69,6 +81,8 @@ export interface ArmState {
   angle: number;
   /** The shot trigger; a shot fires as it crosses 1. */
   power: number;
+  /** Reach this arm's next shot needs, in arm lengths. */
+  need: number;
   /** Pulled in since the last shot, so the next extension fires. */
   armed: boolean;
   /** Out straight in a shooting direction right now. */
@@ -88,8 +102,31 @@ export interface ViewPoint {
 }
 
 const newArm = (): ArmState => ({
-  ok: false, reach: 0, straight: 0, angle: -Math.PI / 2, power: 0, armed: false, extended: false, out: 0, up: -1, shotAt: -1e9,
+  ok: false, reach: 0, straight: 0, angle: -Math.PI / 2, power: 0, need: NEED_MAX, armed: false, extended: false, out: 0, up: -1,
+  shotAt: -1e9,
 });
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** The value `q` of the way up the sorted samples. */
+function percentile(xs: number[], q: number) {
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.floor(q * s.length))];
+}
+
+/**
+ * The arm pose that points at a ring seen `yaw` radians toward the arm's side and `el`
+ * above the view. A ring in its usual spot asks for the default aim; one nearer the
+ * middle or lower asks for a shorter punch, one further out or higher a longer one.
+ */
+export function aimToward(yaw: number, el: number) {
+  const nx = RING_YAW - EYE_SHOULDER.yaw, ny = RING_EL - EYE_SHOULDER.el;
+  const vx = yaw - EYE_SHOULDER.yaw, vy = el - EYE_SHOULDER.el;
+  const base = Math.hypot(DEFAULT_AIM.out, DEFAULT_AIM.up);
+  const angle = clamp(Math.atan2(DEFAULT_AIM.up, DEFAULT_AIM.out) + Math.atan2(vy, vx) - Math.atan2(ny, nx), 0.15, 1.6);
+  const reach = clamp((base * Math.hypot(vx, vy)) / Math.hypot(nx, ny), NEED_MIN / SHOOT_OF_TARGET, 0.88);
+  return { out: reach * Math.cos(angle), up: reach * Math.sin(angle) };
+}
 
 export class MotionInput {
   state: TrackState = "off";
@@ -101,7 +138,7 @@ export class MotionInput {
   readonly arms: [ArmState, ArmState] = [newArm(), newArm()];
   /** Keypoints in the mirrored camera picture. */
   readonly view: ViewPoint[] = LANDMARKS.map(() => ({ x: 0, y: 0, ok: false }));
-  /** Where each fist lands at full stretch (mirrored picture coordinates). */
+  /** Where each fist has to get to for a shot right now (mirrored picture coordinates). */
   readonly targets: [ViewPoint, ViewPoint] = [{ x: 0.3, y: 0.2, ok: false }, { x: 0.7, y: 0.2, ok: false }];
   /** Camera picture width / height. */
   aspect = 16 / 9;
@@ -122,6 +159,12 @@ export class MotionInput {
   private readonly Y = new Float32Array(17);
   private readonly ok = new Uint8Array(17);
   private readonly upperLen: [number, number] = [0.6, 0.6];
+  private readonly upperSamples: [number[], number[]] = [[], []];
+  private readonly foreSamples: [number[], number[]] = [[], []];
+  /** Each arm's target, in arm lengths: toward its own side, and up. */
+  private readonly aim = [{ ...DEFAULT_AIM }, { ...DEFAULT_AIM }];
+  /** Full-stretch fist points for the framing check (mirrored picture coordinates). */
+  private readonly stretch: [ViewPoint, ViewPoint] = [{ x: 0.3, y: 0.2, ok: false }, { x: 0.7, y: 0.2, ok: false }];
   private prevT = 0;
   private readonly prevM: [number, number] = [NaN, NaN];
   private prevLean = 0;
@@ -194,6 +237,17 @@ export class MotionInput {
     }
   }
 
+  /** Point an arm's next shot at a target, in arm lengths (see `aimToward`). */
+  setAim(k: 0 | 1, out: number, up: number) {
+    this.aim[k].out = out;
+    this.aim[k].up = up;
+  }
+
+  /** Reach the next shot from arm `k` needs, in arm lengths. */
+  needFor(k: 0 | 1) {
+    return clamp(SHOOT_OF_TARGET * Math.hypot(this.aim[k].out, this.aim[k].up), NEED_MIN, NEED_MAX);
+  }
+
   /** Take the current standing posture as "not leaning" (call while the player stands still). */
   calibrateLean() {
     if (this.recentLean.length < 5) return;
@@ -205,7 +259,7 @@ export class MotionInput {
     const f = (v: number) => v.toFixed(2);
     const arm = (a: ArmState, k: number) =>
       `${k ? "R" : "L"} ${a.ok ? "ok" : "--"} reach ${f(a.reach)} str ${f(a.straight)} ang ${Math.round((a.angle * 180) / Math.PI)}° ` +
-      `pow ${f(a.power)} ${a.armed ? "ARMED" : "     "} len ${f(this.armLen[k])}`;
+      `need ${f(a.need)} pow ${f(a.power)} ${a.armed ? "ARMED" : "     "} len ${f(this.armLen[k])}`;
     return [
       `motion ${this.state}${this.reason ? ` (${this.reason})` : ""} ${this.rateHz.toFixed(0)} Hz, latency ${this.latencyMs.toFixed(0)} ms, clock ${this.clock ?? "?"}, ${this.accuracy}`,
       `framing ${this.framing} ${this.framingOkFor.toFixed(1)}s, aspect ${this.aspect.toFixed(2)}`,
@@ -300,21 +354,22 @@ export class MotionInput {
       const a = this.arms[k];
       let m = NaN;
       a.ok = !!(ok[el] && ok[wr]);
+      a.need = this.needFor(k);
       if (a.ok) {
         const upper = Math.hypot(X[el] - X[sh], Y[el] - Y[sh]) / tl;
         const fore = Math.hypot(X[wr] - X[el], Y[wr] - Y[el]) / tl;
         const vx = ((X[wr] - X[sh]) * outX) / tl, vy = (Y[sh] - Y[wr]) / tl;
         const d = Math.hypot(vx, vy);
         a.straight = d / Math.max(1e-3, upper + fore);
-        if (a.straight > 0.85) this.learnArm(k, upper, upper + fore);
+        this.learnArm(k, upper, fore);
         const len = this.armLen[k];
         a.reach = d / len;
         a.angle = Math.atan2(vy, vx);
         a.out = vx / len;
         a.up = vy / len;
-        m = Math.min(a.reach / SHOOT_REACH, a.straight / SHOOT_STRAIGHT);
+        m = Math.min(a.reach / a.need, a.straight / SHOOT_STRAIGHT);
         if (a.angle < AIM_MIN || a.angle > AIM_MAX) m = Math.min(m, 0.6);
-        if (!a.armed && (a.reach < REARM_REACH || a.straight < REARM_STRAIGHT)) a.armed = true;
+        if (!a.armed && (a.reach < a.need * REARM_OF_NEED || a.straight < REARM_STRAIGHT)) a.armed = true;
       } else if (ok[el]) {
         const vx = ((X[el] - X[sh]) * outX) / tl, vy = (Y[sh] - Y[el]) / tl;
         a.angle = Math.atan2(vy, vx);
@@ -344,25 +399,29 @@ export class MotionInput {
 
     // ---- framing: can both fists reach full stretch inside the picture?
     if (ok[LW] || ok[RW]) this.wristsSeenAt = receipt;
+    const toView = (p: ViewPoint, sh: number, outX: number, out: number, up: number, len: number) => {
+      const px = (X[sh] + outX * out * len) / aspect;
+      const py = Y[sh] - up * len;
+      p.x = mirrorView ? 1 - px : px;
+      p.y = py;
+      p.ok = px >= EDGE && px <= 1 - EDGE && py >= EDGE;
+    };
     let out = 0, outSide = 0;
     for (const k of [0, 1] as const) {
       const sh = k === 0 ? LS : RS;
       const outX = rightX * (k === 0 ? -1 : 1);
-      const reach = this.armLen[k] * tl;
-      const px = (X[sh] + outX * reach * Math.cos(TARGET_ANGLE)) / aspect;
-      const py = Y[sh] - reach * Math.sin(TARGET_ANGLE);
-      const tg = this.targets[k];
-      tg.x = mirrorView ? 1 - px : px;
-      tg.y = py;
-      tg.ok = px >= EDGE && px <= 1 - EDGE && py >= EDGE;
-      if (!tg.ok) {
+      const len = this.armLen[k] * tl;
+      toView(this.targets[k], sh, outX, this.aim[k].out, this.aim[k].up, len);
+      const st = this.stretch[k];
+      toView(st, sh, outX, Math.cos(FRAME_ANGLE), Math.sin(FRAME_ANGLE), len);
+      if (!st.ok) {
         out++;
-        outSide = tg.x < 0.5 ? -1 : 1;
+        outSide = st.x < 0.5 ? -1 : 1;
       }
     }
     let issue: FrameIssue = "none";
     const headCut = !ok[0] && msY < 0.25;
-    if (tl > 0.45 || headCut || out === 2 || (out === 1 && this.targets.some((tg) => tg.y < EDGE))) issue = "too-close";
+    if (tl > 0.45 || headCut || out === 2 || (out === 1 && this.stretch.some((st) => st.y < EDGE))) issue = "too-close";
     else if (out === 1) issue = outSide < 0 ? "move-right" : "move-left";
     else if (tl < 0.1) issue = "too-far";
     else if (receipt - this.wristsSeenAt > HANDS_HIDDEN_AFTER_MS) issue = "hands-hidden";
@@ -399,12 +458,25 @@ export class MotionInput {
     this.prevT = t;
   }
 
-  /** Arm length: grows quickly toward the longest a straight arm has looked, shrinks slowly. */
-  private learnArm(k: 0 | 1, upper: number, total: number) {
-    const L = this.armLen[k];
-    this.armLen[k] = Math.min(1.6, Math.max(0.75, L + (total - L) * (total > L ? 0.25 : 0.003)));
-    const U = this.upperLen[k];
-    this.upperLen[k] = Math.min(0.9, Math.max(0.35, U + (upper - U) * (upper > U ? 0.25 : 0.003)));
+  /**
+   * Arm length: a high percentile of each segment's recent length. A segment pointing at
+   * the camera looks short and a jittery keypoint looks long; neither moves a percentile
+   * much, so the reach a shot needs doesn't creep up over a session.
+   */
+  private learnArm(k: 0 | 1, upper: number, fore: number) {
+    const U = this.upperSamples[k], F = this.foreSamples[k];
+    U.push(upper);
+    F.push(fore);
+    if (U.length > ARM_SAMPLES) {
+      U.shift();
+      F.shift();
+    }
+    // Lean on the defaults until there are enough samples to trust.
+    const w = Math.min(1, U.length / 30);
+    const u = 0.6 + (percentile(U, 0.85) - 0.6) * w;
+    const f = 0.5 + (percentile(F, 0.85) - 0.5) * w;
+    this.upperLen[k] = clamp(u, 0.35, 0.9);
+    this.armLen[k] = clamp(u + f, 0.75, 1.6);
   }
 
   /** Map the provider's capture time onto performance.now(). */

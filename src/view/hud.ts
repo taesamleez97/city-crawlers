@@ -2,12 +2,22 @@
 // and data-little-* annotations so the Little agent can read and drive it.
 
 import { BodyGuide } from "./bodyGuide";
-import { LEFT_COLOR, LEAN_COLOR, RIGHT_COLOR, figureSvg, leanSvg, shootSvg } from "./cueStyle";
+import { LEFT_COLOR, LEAN_COLOR, RIGHT_COLOR, leanSvg, shootSvg } from "./cueStyle";
 
-export type MenuItem = { id: string; label: string; action: string; onSelect: () => void };
+export type MenuItem = {
+  id: string;
+  /** Plain text: what the Little agent reads, and the button unless `html` is given. */
+  label: string;
+  html?: string;
+  locked?: boolean;
+  action: string;
+  onSelect: () => void;
+};
 export type Results = {
+  heading: string;
   score: number; best: number; newBest: boolean; stars: number; grade: string;
   rows: Array<[string, string]>;
+  note?: string;
 };
 export type GuidePanel = {
   title: string;
@@ -40,11 +50,12 @@ class Menu {
     this.items = items;
     this.root.innerHTML = "";
     this.buttons = items.map((it, i) => {
-      const b = el("button", "btn", it.label);
+      const b = el("button", it.html ? "btn rich" : "btn", it.html ?? it.label);
+      b.classList.toggle("locked", !!it.locked);
       b.dataset.little = "control";
       b.dataset.littleId = it.id;
       b.dataset.littleAction = it.action;
-      b.dataset.littleLabel = it.label;
+      b.dataset.littleLabel = it.locked ? `${it.label} (locked)` : it.label;
       b.dataset.littleOrder = String(i + 1);
       b.addEventListener("click", () => it.onSelect());
       this.root.append(b);
@@ -254,18 +265,18 @@ export class Hud {
     this.menuOpen = false;
   }
 
-  showTitle(best: number, items: MenuItem[], cameraNote: string) {
+  showTitle(items: MenuItem[], cameraNote: string, focus = 0) {
     this.open(
       `<div class="title">
         <div class="logo big"><span>CITY</span><span class="l2">CRAWLERS</span></div>
         <div class="tagline">Swing through the city to the beat. Shoot your webs with your own arms.</div>
-        <div class="menu-slot"></div>
-        ${best > 0 ? `<div class="best" data-little="readout" data-little-label="Best score" data-little-data='{"value":${best}}'>BEST ${best.toLocaleString("en-US")}</div>` : ""}
+        <div class="menu-slot levels"></div>
         ${controlsCard()}
         ${cameraNote ? `<div class="camera-note">${cameraNote}</div>` : ""}
       </div>`,
       "Title",
       items,
+      focus,
     );
     this.overlay.classList.add("title-mode");
   }
@@ -281,7 +292,7 @@ export class Hud {
     const rows = r.rows.map(([k, v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`).join("");
     this.open(
       `<div class="panel results">
-        <h2>ROUTE COMPLETE</h2>
+        <h2>${r.heading}</h2>
         <div class="result-head">
           <div class="grade" data-little="readout" data-little-label="Grade" data-little-data='{"value":"${r.grade}"}'>${r.grade}</div>
           <div>
@@ -291,6 +302,7 @@ export class Hud {
         </div>
         ${r.newBest ? `<div class="newbest">NEW BEST!</div>` : `<div class="bestline">BEST ${r.best.toLocaleString("en-US")}</div>`}
         <div class="rows">${rows}</div>
+        ${r.note ? `<div class="note" data-little="readout" data-little-label="Note">${r.note}</div>` : ""}
         <div class="menu-slot"></div>
       </div>`,
       "Results",
@@ -302,10 +314,9 @@ export class Hud {
 function controlsCard() {
   const shoot = (side: number, color: string) => `<i class="mini-cue hand" style="background:${color}">${shootSvg(side)}</i>`;
   const lean = (side: number) => `<i class="mini-cue lean" style="background:${LEAN_COLOR}">${leanSvg(side)}</i>`;
+  // Stance and framing are taught on the get-ready screen.
   return `<div class="controls moves">
-    <div><i class="mini-fig">${figureSvg("stance")}</i><span><b>Fists up</b> by your shoulders</span></div>
-    <div>${shoot(-1, LEFT_COLOR)}${shoot(1, RIGHT_COLOR)}<span><b>Shoot a web</b> at each ring as its outer circle closes: punch that arm up and out</span></div>
+    <div>${shoot(-1, LEFT_COLOR)}${shoot(1, RIGHT_COLOR)}<span><b>Shoot a web</b> when a ring's circle locks on: punch that arm out toward it</span></div>
     <div>${lean(-1)}${lean(1)}<span><b>Lean</b> where the arrows point to dodge girders</span></div>
-    <div><i class="mini-fig">${figureSvg("frame")}</i><span>Stand back so your <b>raised fists fit</b> in the camera picture</span></div>
   </div>`;
 }

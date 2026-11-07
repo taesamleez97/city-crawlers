@@ -10,11 +10,17 @@
       "start": {
         "type": "boolean",
         "description": "true to skip the title screen and begin a run immediately, e.g. when the viewer says 'start a run' or 'let's play'."
+      },
+      "level": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 3,
+        "description": "Which level to select (1 Web Shooter, 2 Dodge, 3 Full Crawl), only when the viewer names one. Locked levels are ignored; omit for the next level they haven't cleared."
       }
     },
     "additionalProperties": false
   },
-  "guide": "You are the game's announcer. The game is played with the body, not the remote. The hero swings through the city on a fixed route to the music. The cues are in the city itself. A ring on a building ahead means shoot a web with that arm, blue for left and pink for right: fists up by the shoulders, then punch that arm straight up and out just as the ring's outer circle closes onto it. A girder swinging into the street with orange chevrons means lean the body the way the chevrons point to dodge it, when they flash. Before a run, the Get Ready screen shows the camera picture: the viewer finds their spot (stand back until the box turns green, with room for raised fists), then tries each move. If the camera loses them, the game pauses and shows the picture until they step back into view. Coach with the Camera view readout (it says what to fix: step back, move left or right, show both hands). Read the Run status readouts (score, combo, accuracy) when asked how they are doing, and the Grade and Stars on the results screen. Back pauses. Only pause, resume, restart or quit when the viewer asks. Never start a new run over one in progress unless the viewer asks to restart.",
+  "guide": "You are the game's announcer. The game is played with the body, not the remote. The hero swings through the city on a fixed route to the music. There are three levels that teach one move at a time: 1 Web Shooter (webs only), 2 Dodge (the hero fires its own webs and the viewer only leans), and 3 Full Crawl (both together, mixed in gradually). Each level unlocks when the one before it is finished with at least 60% accuracy; the title menu says which are locked. The cues are in the city itself. A ring on a building ahead means shoot a web with that arm, blue for left and pink for right: fists up by the shoulders, then punch that arm up and out toward the ring when its outer circle closes and locks onto it. The ring then holds for a moment while a colored disc drains, and the web still counts until the disc is empty. The punch only has to reach the target dot in the camera view; a locked elbow isn't needed. A shot that doesn't hit flashes at the wrist and says EARLY or OTHER ARM over the ring. A girder swinging into the street with orange chevrons means lean the body the way the chevrons point to dodge it, when they flash. Before a run, the Get Ready screen shows the camera picture: the viewer finds their spot (stand back until the box turns green, with room for raised fists), then tries that level's moves. If the camera loses them, the game pauses and shows the picture until they step back into view. Coach with the Camera view readout (it says what to fix: step back, move left or right, show both hands). Read the Run status readouts (score, combo, accuracy) when asked how they are doing, and the Grade, Stars and Note on the results screen. Back pauses. Only pause, resume, restart or quit when the viewer asks. Never start a new run over one in progress unless the viewer asks to restart.",
   "capabilities": [
     { "name": "sense.motion", "reason": "Play with your body: punch up and out to shoot webs, lean to dodge, in time with the music." },
     { "name": "media.camera", "reason": "Show you the camera picture while you get set up, so you can see where to stand and where your fists go." }
@@ -22,9 +28,14 @@
   "tools": [
     {
       "name": "start_run",
-      "description": "Start a new run from the title or results screen.",
+      "description": "Start a new run from the title or results screen. Without a level it plays the selected one (the next uncleared level, or the one just played).",
       "authority": "read",
-      "params": { "type": "object", "properties": {} }
+      "params": {
+        "type": "object",
+        "properties": {
+          "level": { "type": "integer", "minimum": 1, "maximum": 3, "description": "1 Web Shooter, 2 Dodge or 3 Full Crawl. Only when the viewer names a level; locked levels are refused." }
+        }
+      }
     },
     {
       "name": "pause_game",

@@ -4,7 +4,9 @@
 // Each web cue is a ring hanging where the web will stick, blue for the left arm
 // and pink for the right, always on that side of the view. It shows up four beats
 // out, pulses on every beat, and an outer ring closes onto it to land exactly on
-// its beat. A hit splats a web across it; a miss greys it out.
+// its beat. There it locks on with a flash and holds: a solid disc drains over the
+// judge's late window, and the web counts until it empties. A hit splats a web
+// across it; a miss greys it out. Webs the hero fires by itself get no ring.
 //
 // Each lean is a chevron board bolted to the face of its girder, right in front of
 // the hero, pointing at the open gap: it stays in view all the way in, even as
@@ -19,7 +21,7 @@ import {
 } from "three";
 
 import { clamp } from "../core/math";
-import type { CueRt, Judgment } from "../rhythm/judge";
+import { type CueRt, HAND_HOLD, type Judgment } from "../rhythm/judge";
 import { BEAM_DELAY, BEAM_REACH, DODGE_OFFSET, type Route } from "../rhythm/route";
 import { BEAT, type Side } from "../rhythm/song";
 import { LEAN_COLOR, LEFT_COLOR, RIGHT_COLOR } from "./cueStyle";
@@ -27,6 +29,8 @@ import { LEAN_COLOR, LEFT_COLOR, RIGHT_COLOR } from "./cueStyle";
 /** Beats ahead a ring shows up, and how long its approach ring takes to close. */
 const RING_LEAD = 4;
 const APPROACH = 2;
+/** Beats a ring holds after its beat, waiting for the web. */
+const HOLD = HAND_HOLD / BEAT;
 /** Beats ahead a lean sign shows up, and how long its chevrons take to fill. */
 const SIGN_LEAD = 5;
 const FILL = 1.5;
@@ -185,6 +189,8 @@ type Ring = {
   /** Faint copy drawn through walls, so a ring behind a skybridge can still be followed. */
   ghost: Mesh<TorusGeometry, MeshBasicMaterial>;
   face: Mesh<CircleGeometry, MeshBasicMaterial>;
+  /** Solid disc behind the face that drains over the hold. */
+  timer: Mesh<CircleGeometry, MeshBasicMaterial>;
   approach: Mesh<TorusGeometry, MeshBasicMaterial>;
   halo: Sprite;
   cue: number;
@@ -237,6 +243,8 @@ export class WorldCues {
       h.renderOrder = 9;
       const face = new Mesh(disc, basic({ map: this.faces[1], depthWrite: false, side: DoubleSide }));
       face.renderOrder = 10;
+      const timer = new Mesh(disc, basic({ depthWrite: false, side: DoubleSide }));
+      timer.renderOrder = 9.8;
       const ghost = new Mesh(torus, basic({ depthTest: false, depthWrite: false }));
       ghost.renderOrder = 9.5;
       const body = new Mesh(torus, basic({}));
@@ -244,10 +252,10 @@ export class WorldCues {
       // The timing signal is never hidden.
       const approach = new Mesh(thin, basic({ depthTest: false, depthWrite: false }));
       approach.renderOrder = 12;
-      root.add(h, ghost, face, body, approach);
+      root.add(h, ghost, timer, face, body, approach);
       root.visible = false;
       this.group.add(root);
-      this.rings.push({ root, body, ghost, face, approach, halo: h, cue: -1, swing: -1, fade: 0 });
+      this.rings.push({ root, body, ghost, face, timer, approach, halo: h, cue: -1, swing: -1, fade: 0 });
     }
 
     const board = new PlaneGeometry(SIGN_W, SIGN_H);
@@ -316,6 +324,15 @@ export class WorldCues {
     this.say(j.grade.toUpperCase(), j.grade, at, { sub, px: j.grade === "perfect" ? 118 : 96 });
   }
 
+  /** A web that didn't count, called out just above the ring it was meant for. */
+  nudge(rt: CueRt, text: string) {
+    const i = this.swingOf.get(rt.cue.id);
+    if (rt.cue.kind !== "hand" || i === undefined) return;
+    const w = this.route.swings[i];
+    const at = this.v.copy(w.anchor).addScaledVector(this.camUp, Math.max(w.ring, w.anchor.distanceTo(this.camPos) * MIN_ANGULAR) * 1.9);
+    this.say(text, "info", at, { px: 64 });
+  }
+
   /** A callout floating in the city at `at`, about `px` tall on a 1080p screen. */
   say(text: string, kind: CalloutKind, at: Vector3, opts: { sub?: string; px?: number } = {}) {
     let p = this.popups.find((k) => !k.live);
@@ -339,7 +356,7 @@ export class WorldCues {
     for (const rt of rts) {
       const ahead = rt.cue.beat - beat;
       if (ahead > SIGN_LEAD) break;
-      if (rt.state !== "pending" || ahead < -0.3) continue;
+      if (rt.state !== "pending" || rt.cue.auto || ahead < -0.3) continue;
       if (rt.cue.kind === "hand") {
         if (ahead > RING_LEAD || this.rings.some((r) => r.cue === rt.cue.id)) continue;
         const r = this.rings.find((k) => k.cue < 0);
@@ -377,14 +394,16 @@ export class WorldCues {
     r.root.quaternion.copy(cam.quaternion);
 
     const body = r.body.material, face = r.face.material, ap = r.approach.material, halo = r.halo.material;
+    const timer = r.timer.material;
     let scale = 1, opacity: number, haloOp: number;
-    let apScale = 1, apOp = 0;
+    let apScale = 1, apOp = 0, timerK = 0;
     face.color.copy(WHITE);
     ap.color.copy(this.colors[side]).lerp(WHITE, 0.65);
 
-    if (rt.state === "pending") {
+    if (rt.state === "pending" && ahead > 0) {
+      // Closing: the outer ring shrinks at a steady rate and touches the ring on the beat.
       const appear = clamp((RING_LEAD - ahead) / 0.6, 0, 1);
-      const near = clamp(1 - Math.abs(ahead), 0, 1);
+      const near = clamp(1 - ahead, 0, 1);
       r.fade = appear;
       opacity = 1;
       scale = (0.55 + 0.45 * appear) * (1 + (ahead < 3.05 ? pulse * 0.1 : 0));
@@ -392,10 +411,26 @@ export class WorldCues {
       face.map = this.faces[side];
       haloOp = 0.3 + 0.7 * near * near;
       halo.color.copy(this.colors[side]);
-      if (ahead < APPROACH + 0.4 && ahead > -0.25) {
-        apScale = 1 + 1.7 * clamp(ahead / APPROACH, 0, 1.2);
+      if (ahead < APPROACH + 0.4) {
+        apScale = 1 + 1.7 * Math.min(ahead / APPROACH, 1.2);
         apOp = clamp((APPROACH + 0.4 - ahead) / 0.5, 0, 1);
       }
+    } else if (rt.state === "pending") {
+      // Holding: locked on with a flash, then the disc drains over the late window. Shoot!
+      const since = -ahead;
+      const flash = Math.exp(-since * 9);
+      r.fade = 1;
+      opacity = 1;
+      scale = 1.12 + 0.18 * flash;
+      body.color.copy(this.colors[side]).lerp(WHITE, 0.45 + 0.55 * flash);
+      face.map = this.faces[side];
+      haloOp = 1;
+      halo.color.copy(this.colors[side]).lerp(WHITE, flash);
+      apScale = 1;
+      apOp = 1;
+      ap.color.copy(WHITE);
+      timerK = clamp(1 - since / HOLD, 0, 1);
+      timer.color.copy(this.colors[side]).lerp(WHITE, 0.15 + 0.85 * flash);
     } else if (rt.state === "miss") {
       const since = beat - rt.cue.beat;
       r.fade = webSwing === r.swing || since < 1.2 ? 1 : Math.max(0, r.fade - dt * 4);
@@ -438,6 +473,9 @@ export class WorldCues {
     r.approach.visible = apOp > 0;
     r.approach.scale.setScalar(apScale);
     ap.opacity = apOp * f;
+    r.timer.visible = timerK > 0;
+    r.timer.scale.setScalar(Math.max(1e-3, timerK));
+    timer.opacity = 0.92 * f;
   }
 
   // ---------------------------------------------------------------- lean signs
