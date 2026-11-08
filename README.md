@@ -62,13 +62,23 @@ marching while you wait. A clean lean carries you through the gap and collects i
 a late one is an OUCH and the girder swings.
 
 A shot fires when an armed arm reaches full stretch, pointing out to the side or up (not
-down or across the body). Pulling the arm back in re-arms it. A missed web makes the hero
-sag and slow, then a recovery web catches up within a couple of beats.
+down or across the body). Pulling the arm back in re-arms it. The hero never fires a web by
+itself: every web in a run is a ring the player shoots. A missed web leaves the hero with
+no web, so it drops and slows until the player's next web catches. A punch that arrives
+just after its ring has closed says TOO LATE on that ring.
 
-Every city plays the same chart, with webs and dodges mixed together from the start. The
-pacing eases in: early cues are 8 beats apart, then 6, then 4 as the song goes on, and
-only the last few bars pair two webs 2 beats apart. Every dodge has 4 clear beats around
-it, so a shot, a dodge and another shot never come back to back.
+Every city plays the same chart, with webs and dodges mixed together from the start. A web
+carries the hero 4 beats at most, so the pacing starts with a ring every 4 beats, tightens
+to every 3, and only the last few bars pair webs 2 beats apart. Every dodge has 4 clear
+beats on both sides, so a shot, a dodge and another shot never come back to back. Over a
+dodge the hero's swing is 8 beats long, and it lets go of the web at the bottom to lean
+through.
+
+Timing is judged at the moment the camera saw the punch, not when the frame reached the
+game. A ring stays open until a punch from inside its window can no longer be on its way
+from the camera. The game also learns how late each player's punches land: the median of
+their last nine punches at rings, capped at 250 ms and saved between sessions. A punch
+thrown on the beat is then judged on the beat, and the ring's hold lasts that much longer.
 
 The remote never plays the game; it only drives menus (OK, Back, arrows).
 
@@ -147,7 +157,7 @@ and pose tracking.
 
 | URL flag | Effect |
 |---|---|
-| `?debug` | exposes `window.game`; on-screen motion readout (rate, latency, framing, per-arm reach/straightness/angle/power, armed state, learned arm length, lean) plus the last hit offsets |
+| `?debug` | exposes `window.game`; on-screen motion readout (rate, latency, framing, per-arm reach/straightness/angle/power, armed state, learned arm length, lean), the learned punch lag and input delay, plus the last hit offsets |
 | `?keys` | desk testing without a camera: Q/E shoot left/right webs, A/D lean |
 | `?autoplay` | a bot plays every cue perfectly (`?autoplay=miss` drops every fourth); goes straight to a city and never opens the camera |
 | `?city=seoul\|nyc\|tokyo\|la` | the city to aim at on the rooftop (with `?autoplay`, the city it plays) |

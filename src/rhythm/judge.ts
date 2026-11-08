@@ -7,8 +7,9 @@ export type Grade = "perfect" | "great" | "good" | "miss";
 export type CueState = "pending" | "hit" | "miss" | "skipped";
 
 /**
- * Seconds a ring holds still after its beat, waiting for the web. The late side of a
- * web's window ends exactly when the hold does, so what you see is what counts.
+ * Seconds a ring holds still after its beat, waiting for the web (longer by the
+ * player's punch lag). The late side of a web's window ends exactly when the hold
+ * does, so what you see is what counts.
  */
 export const HAND_HOLD = 0.4;
 
@@ -46,6 +47,8 @@ export interface Judgment {
 
 export class Judge {
   readonly rts: CueRt[];
+  /** Seconds a punch is moved back before it's judged: how late this player's punches land (see PunchLag). */
+  handLag = 0;
   score = 0;
   combo = 0;
   maxCombo = 0;
@@ -76,12 +79,13 @@ export class Judge {
   }
 
   /** A gesture at song time `t`: the nearest open cue of that kind and side takes it. */
-  input(kind: CueKind, side: Side, t: number): Judgment | null {
+  input(kind: CueKind, side: Side, at: number): Judgment | null {
+    const t = kind === "hand" ? at - this.handLag : at;
     let best: CueRt | null = null;
     let bestD = Infinity;
     for (const rt of this.rts) {
       if (rt.time > t + 1) break;
-      if (rt.state !== "pending" || rt.cue.auto || rt.cue.side !== side || rt.cue.kind !== kind) continue;
+      if (rt.state !== "pending" || rt.cue.side !== side || rt.cue.kind !== kind) continue;
       const d = Math.abs(t - rt.time);
       if (d <= tiers(kind, t - rt.time)[2] && d < bestD) {
         best = rt;
@@ -96,11 +100,15 @@ export class Judge {
     return this.finish(rt, grade, offset);
   }
 
-  /** Cues whose window has closed by song time `t` become misses. */
-  sweep(t: number, out: Judgment[]) {
+  /**
+   * Cues whose window has closed by song time `t` become misses. Pass the time of the
+   * newest input that could still be on its way, not the time now.
+   */
+  sweep(at: number, out: Judgment[]) {
     for (const rt of this.rts) {
-      if (rt.time - 1 > t) break;
-      if (rt.state === "pending" && !rt.cue.auto && t > rt.time + WINDOWS[rt.cue.kind].late[2]) {
+      if (rt.time - 1 > at) break;
+      const t = rt.cue.kind === "hand" ? at - this.handLag : at;
+      if (rt.state === "pending" && t > rt.time + WINDOWS[rt.cue.kind].late[2]) {
         out.push(this.finish(rt, "miss", t - rt.time));
       }
     }
@@ -111,7 +119,7 @@ export class Judge {
     return rt.state === "pending" ? this.finish(rt, "miss", t - rt.time) : null;
   }
 
-  /** Cues the viewer could not fairly make (just after a resume) or that play themselves: no score, no penalty. */
+  /** Cues the viewer could not fairly make (just after a resume): no score, no penalty. */
   skip(rt: CueRt) {
     if (rt.state === "pending") rt.state = "skipped";
   }

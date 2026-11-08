@@ -13,6 +13,7 @@ import type { CameraFeed, LittlePlatform } from "../platform/little";
 import { Dressing } from "../rhythm/dressing";
 import { type CueRt, HAND_HOLD, Judge, type Judgment } from "../rhythm/judge";
 import { Conductor } from "../rhythm/music";
+import { PunchLag } from "../rhythm/punchLag";
 import { BEAM_DELAY, DODGE_OFFSET, Route, newSample } from "../rhythm/route";
 import { BEAT, type CueKind, FINISH_BEAT, LEAP_BEAT, RESULTS_BEAT, type Side, buildChart } from "../rhythm/song";
 import { ArmsView, type BodyArm } from "../view/arms";
@@ -45,7 +46,15 @@ const FIRST_CUE_BEAT = 8;
 const RESUME_GRACE = 0.75;
 /** Auto-pause when the player has been out of the camera's view this long (seconds). */
 const LOST_PAUSE_AFTER = 1.0;
-const RECOVERY_DELAY = 0.3;
+/** A web carries the hero this many beats at most: over a dodge it lets go at the bottom of the swing. */
+const WEB_HOLD = 4.4;
+/** A punch this soon after its ring was missed (seconds) was meant for it: called out as late, and learned from. */
+const LATE_SHOT = 0.9;
+/** …and one this far ahead of its ring was meant for it too, just early. */
+const EARLY_SHOT = 0.5;
+/** On top of the camera's measured latency: one camera frame and one game frame (seconds). */
+const INPUT_SLACK = 0.06;
+const MAX_INPUT_DELAY = 0.3;
 /** The camera view only comes up in play when framing needs fixing (seconds off before it shows, fine before it goes). */
 const PIP_SHOW_AFTER = 0.25;
 const PIP_HIDE_AFTER = 1.5;
@@ -210,8 +219,8 @@ export class Game {
   private sagTarget = 0;
   private lean = 0;
   private assist: { side: Side; until: number } | null = null;
-  private web: { swing: number; recovery: boolean } | null = null;
-  private recovery: { swing: number; at: number } | null = null;
+  private web: { swing: number } | null = null;
+  private readonly punchLag = new PunchLag();
   private beamsPassed = 0;
   private leanHeld: { side: Side; since: number } | null = null;
   private graceUntil = -Infinity;
@@ -785,7 +794,6 @@ export class Game {
     this.lean = 0;
     this.assist = null;
     this.web = null;
-    this.recovery = null;
     this.beamsPassed = 0;
     this.leanHeld = null;
     this.graceUntil = -Infinity;
@@ -971,6 +979,7 @@ export class Game {
     this.hud.hideGuide();
     this.closeCamera();
     this.resetRun();
+    this.setPunchLag();
     this.state = "play";
     this.stateT = 0;
     this.hud.showRunHud(true);
@@ -979,7 +988,19 @@ export class Game {
     this.resetAim();
     this.conductor.start(-0.3);
     this.setTools(["pause_game", "restart_run", "quit_game"]);
-    this.little.emit("run_started", { city: this.city.id, input: this.mode, cues: this.judge.rts.filter((rt) => !rt.cue.auto).length });
+    this.little.emit("run_started", { city: this.city.id, input: this.mode, cues: this.judge.rts.length });
+  }
+
+  /** Only camera punches lag: keys and autoplay are judged as they come. */
+  private setPunchLag() {
+    const lag = this.mode === "motion" ? this.punchLag.value : 0;
+    this.judge.handLag = lag;
+    this.cues.handLag = lag;
+  }
+
+  /** How long a camera input can still be on its way after it happened (seconds). */
+  private inputDelay() {
+    return this.mode === "motion" ? clamp(this.motion.latencyMs / 1000 + INPUT_SLACK, 0, MAX_INPUT_DELAY) : 0;
   }
 
   /** What to do, shown over the opening bars. */
@@ -1235,24 +1256,44 @@ export class Game {
     const j = this.judge.input(kind, side, t);
     // Every web that registers flares at the wrist at once, so the player knows the punch counted.
     if (kind === "hand") this.arms.puff(side);
+    if (kind === "hand" && this.mode === "motion") this.learnLag(side, t, j);
     if (j) this.onJudged(j);
     else if (kind === "hand") this.whiff(side, t);
     return !!j;
+  }
+
+  /** Learn how late this player's punches land from the ring each one was meant for. */
+  private learnLag(side: Side, t: number, j: Judgment | null) {
+    let rt = j?.rt ?? null;
+    if (!rt) {
+      for (const k of this.judge.rts) {
+        if (k.time > t + EARLY_SHOT) break;
+        if (k.cue.kind !== "hand" || k.cue.side !== side || (k.state !== "pending" && k.state !== "miss")) continue;
+        if (t - k.time < LATE_SHOT && (!rt || Math.abs(t - k.time) < Math.abs(t - rt.time))) rt = k;
+      }
+    }
+    if (!rt) return;
+    this.punchLag.learn(t - rt.time);
+    this.setPunchLag();
   }
 
   /** A web that registered but had no ring to hit: still a shot, and the ring it was meant for says why. */
   private whiff(side: Side, t: number) {
     this.sfx.thwip();
     this.arms.flick(side);
-    let mine: CueRt | null = null, other: CueRt | null = null;
+    const at = t - this.judge.handLag;
+    let mine: CueRt | null = null, other: CueRt | null = null, missed: CueRt | null = null;
     for (const rt of this.judge.rts) {
-      if (rt.time > t + 1.5) break;
-      if (rt.state !== "pending" || rt.cue.auto || rt.cue.kind !== "hand") continue;
+      if (rt.time > at + 1.5) break;
+      if (rt.cue.kind !== "hand") continue;
+      if (rt.state === "miss" && rt.cue.side === side && at - rt.time < LATE_SHOT) missed = rt;
+      if (rt.state !== "pending") continue;
       if (rt.cue.side === side) mine ??= rt;
-      else if (Math.abs(rt.time - t) < HAND_HOLD + 0.1) other ??= rt;
+      else if (Math.abs(rt.time - at) < HAND_HOLD + 0.1) other ??= rt;
     }
-    if (other && (!mine || Math.abs(other.time - t) < mine.time - t)) this.cues.nudge(other, "OTHER ARM");
-    else if (mine && mine.time > t) this.cues.nudge(mine, "EARLY");
+    if (other && (!mine || Math.abs(other.time - at) < mine.time - at)) this.cues.nudge(other, "OTHER ARM");
+    else if (missed) this.cues.nudge(missed, "TOO LATE");
+    else if (mine && mine.time > at) this.cues.nudge(mine, "EARLY");
   }
 
   // ------------------------------------------------------------------ judgments
@@ -1263,10 +1304,10 @@ export class Game {
     if (cue.kind === "hand") {
       const swing = this.swingOfCue.get(cue.id)!;
       if (j.grade === "miss") {
-        this.missHand(swing);
+        this.missHand();
         this.sfx.fizzle();
       } else {
-        this.fireWeb(swing, false);
+        this.fireWeb(swing);
         this.sfx.thwip();
         this.sfx.attach();
         this.rig.addKick(j.grade === "perfect" ? 0.8 : 0.5);
@@ -1280,14 +1321,15 @@ export class Game {
     }
   }
 
-  private fireWeb(swing: number, recovery: boolean) {
+  /** The player's web catches: the only way the hero ever gets one. */
+  private fireWeb(swing: number) {
     const w = this.route.swings[swing];
-    this.web = { swing, recovery };
+    this.web = { swing };
     this.rider.anchor.copy(w.anchor);
     this.rider.swingSide = w.cue.side;
-    this.webLine.shoot(recovery);
+    this.webLine.shoot();
     this.arms.onAttach(w.cue.side);
-    if (this.recovery && this.recovery.swing <= swing) this.recovery = null;
+    this.sagTarget = 0;
   }
 
   private releaseWeb() {
@@ -1297,11 +1339,10 @@ export class Game {
     this.arms.onRelease();
   }
 
-  /** A missed web: drop, slow down, and a grey recovery web catches you. */
-  private missHand(swing: number) {
+  /** A missed web: no web, so the hero drops and slows until the player's next one catches. */
+  private missHand() {
     this.sagTarget = -TUNING.missSag;
     this.slowLeft = TUNING.slowBeats;
-    this.recovery = { swing, at: this.conductor.songTime() + RECOVERY_DELAY };
     this.releaseWeb();
   }
 
@@ -1416,6 +1457,7 @@ export class Game {
     const offs = recent.map((r) => `${r.cue.kind === "hand" ? "W" : "L"}${Math.round(r.offset! * 1000)}`).join(" ");
     this.hud.setDebug(
       `${this.motion.debugText()}\n${this.state} mode ${this.mode} beat ${beat.toFixed(2)} audio ${this.conductor.audible ? "on" : "off"}\n` +
+        `punch lag ${Math.round(this.punchLag.value * 1000)} ms (${this.punchLag.samples} punches), input delay ${Math.round(this.inputDelay() * 1000)} ms\n` +
         `last offsets ms (+late): ${offs || "-"}`,
     );
   }
@@ -1437,14 +1479,6 @@ export class Game {
       if (rt.time > this.graceUntil) break;
       if (rt.state === "pending") this.skipCue(rt);
     }
-    // Webs the hero fires by itself go off on the beat.
-    for (const rt of this.judge.rts) {
-      if (rt.time > song) break;
-      if (rt.state === "pending" && rt.cue.auto) {
-        this.skipCue(rt);
-        this.sfx.thwip();
-      }
-    }
     // A lean already held when its beat arrives still counts.
     if (this.leanHeld) {
       for (const rt of this.judge.rts) {
@@ -1456,20 +1490,10 @@ export class Game {
         }
       }
     }
+    // A ring only closes once a punch from inside its window can no longer be on its way from the camera.
     const missed: Judgment[] = [];
-    this.judge.sweep(song, missed);
+    this.judge.sweep(song - this.inputDelay(), missed);
     for (const j of missed) this.onJudged(j);
-
-    if (this.recovery && song >= this.recovery.at) {
-      const swing = this.recovery.swing;
-      this.recovery = null;
-      if ((this.web?.swing ?? -1) < swing) {
-        this.fireWeb(swing, true);
-        this.sfx.recover();
-        this.cues.say("RECOVER", "info", this.route.swings[swing].anchor, { px: 64 });
-      }
-      this.sagTarget = 0;
-    }
 
     this.updateCountIn(beat);
     this.updateRide(dt, beat);
@@ -1527,7 +1551,7 @@ export class Game {
       let goal = DEFAULT_AIM;
       for (const rt of this.judge.rts) {
         if (rt.time > song + AIM_LOOKAHEAD) break;
-        if (rt.state !== "pending" || rt.cue.auto || rt.cue.kind !== "hand" || rt.cue.side !== side) continue;
+        if (rt.state !== "pending" || rt.cue.kind !== "hand" || rt.cue.side !== side) continue;
         const p = this.camera.worldToLocal(this.tmp.copy(this.route.swings[this.swingOfCue.get(rt.cue.id)!].anchor));
         if (p.z < -1) goal = aimToward(Math.atan2(p.x * side, -p.z), Math.atan2(p.y, Math.hypot(p.x, p.z)));
         break;
@@ -1546,10 +1570,10 @@ export class Game {
     }
   }
 
+  /** A ring just after a resume goes without a web (only the player fires those); a sign just after one dodges for them. */
   private skipCue(rt: CueRt) {
     this.judge.skip(rt);
-    if (rt.cue.kind === "hand") this.fireWeb(this.swingOfCue.get(rt.cue.id)!, false);
-    else this.assist = { side: rt.cue.side, until: rt.cue.beat + BEAM_DELAY + 0.8 };
+    if (rt.cue.kind === "lean") this.assist = { side: rt.cue.side, until: rt.cue.beat + BEAM_DELAY + 0.8 };
   }
 
   private updateCountIn(beat: number) {
@@ -1600,7 +1624,7 @@ export class Game {
 
     if (this.web) {
       const w = this.route.swings[this.web.swing];
-      if ((this.r - w.start) / (w.end - w.start) > 0.86) this.releaseWeb();
+      if (this.r - w.start > Math.min(0.86 * (w.end - w.start), WEB_HOLD)) this.releaseWeb();
     }
     this.placeRider(this.r, dt);
   }
@@ -1631,7 +1655,7 @@ export class Game {
   private autoplayInputs(song: number, now: number) {
     for (const rt of this.judge.rts) {
       if (rt.time > song) break;
-      if (rt.state !== "pending" || rt.cue.auto) continue;
+      if (rt.state !== "pending") continue;
       if (this.autoplay === "miss" && rt.cue.id % 4 === 1) continue;
       this.onPress(rt.cue.kind, rt.cue.side, now - (song - rt.time) * 1000);
     }

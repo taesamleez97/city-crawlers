@@ -23,8 +23,6 @@ export interface Cue {
   beat: number;
   kind: CueKind;
   side: Side;
-  /** A web the hero fires by itself between the player's: no ring, no score. */
-  auto?: boolean;
 }
 
 export interface Section {
@@ -48,52 +46,38 @@ export function sectionAt(beat: number): Section {
   return s;
 }
 
-// One chart for every city: webs and dodges together, with room to breathe that
-// shrinks as the song goes on. The gap between the player's moves is 8 beats in
-// the first section, then 6, then 4, and only the last bars pair two webs 2 beats
-// apart. A dodge always has 4 beats clear on both sides.
+// One chart for every city. Every web in the run is a ring the player shoots; the
+// hero never fires one by itself. A web carries the hero 4 beats at most, except
+// over a dodge: a dodge keeps 4 beats clear on both sides, and the hero lets go at
+// the bottom of that longer swing to lean through. The gaps shrink as the song goes
+// on: a web every 4 beats to start, then every 3, and the last bars pair webs 2
+// beats apart.
 //
 // One string per bar from bar 2, one character per beat:
 // L / R = left / right web, < / > = lean left / right, . = rest.
 // Corner swings are flipped to the inside of the turn by the route builder.
 const CHART_START_BAR = 2;
 const CHART = [
-  // Bars 2-9: a web every 8 beats, then the first dodge.
-  "R...", "....", "L...", "....",
-  "R...", "....", ">...", "....",
-  // Bars 10-17: every 6 beats.
-  "L.....R.", "....<...", "..L.....", "R.....>.",
-  // Bars 18-25: every 4 beats.
-  "..L...R.", "..<...L.", "..R...>.", "..L...R.",
-  // Bars 26-29: two quick webs, a dodge, three quick webs.
-  "L...>...", "R.L.R...",
+  // Bars 2-9: a web every 4 beats, then the first dodge.
+  "R...", "L...", "R...", "L...",
+  "R...", "L...", ">...", "R...",
+  // Bars 10-17: still every 4 beats, with two dodges.
+  "L...", "R...", "L...", "<...",
+  "R...", "L...", "R...", ">...",
+  // Bars 18-25: every 3 beats between the dodges.
+  "L..R", "..L.", "..<.", "..R.",
+  ".L..", "R...", ">...", "L.R.",
+  // Bars 26-29: a quick web, a dodge, three quick webs.
+  "L...", ">...", "R.L.", "R...",
 ].join("");
 
-/** The longest the hero hangs on one web; longer gaps get webs it fires by itself. */
-const MAX_SWING = 4;
-
 export function buildChart(): Cue[] {
-  const moves: Array<Omit<Cue, "id">> = [];
+  const cues: Cue[] = [];
   for (let k = 0; k < CHART.length; k++) {
     const ch = CHART[k];
     if (ch === ".") continue;
     const side: Side = ch === "L" || ch === "<" ? -1 : 1;
-    moves.push({ beat: CHART_START_BAR * BEATS_PER_BAR + k, kind: ch === "L" || ch === "R" ? "hand" : "lean", side });
+    cues.push({ id: cues.length, beat: CHART_START_BAR * BEATS_PER_BAR + k, kind: ch === "L" || ch === "R" ? "hand" : "lean", side });
   }
-  // Fill long gaps between webs so the swinging keeps its rhythm, stepping off any dodge beat.
-  const leanBeats = new Set(moves.filter((m) => m.kind === "lean").map((m) => m.beat));
-  const webs = moves.filter((m) => m.kind === "hand");
-  const autos: Array<Omit<Cue, "id">> = [];
-  for (let i = 0; i < webs.length; i++) {
-    const from = webs[i].beat, to = i + 1 < webs.length ? webs[i + 1].beat : FINISH_BEAT;
-    const n = Math.ceil((to - from) / MAX_SWING) - 1;
-    let side = webs[i].side;
-    for (let k = 1; k <= n; k++) {
-      let beat = Math.round(from + ((to - from) * k) / (n + 1));
-      if (leanBeats.has(beat)) beat += beat + 1 < to ? 1 : -1;
-      side = -side as Side;
-      autos.push({ beat, kind: "hand", side, auto: true });
-    }
-  }
-  return [...moves, ...autos].sort((a, b) => a.beat - b.beat).map((c, id) => ({ ...c, id }));
+  return cues;
 }

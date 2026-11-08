@@ -22,6 +22,6 @@ export const TUNING = {
   /** …for this many beats, then a smooth catch-up of at most this much extra speed. */
   slowBeats: 0.8,
   catchUpMax: 0.6,
-  /** How far the hero drops on a missed web before the recovery web catches. */
+  /** How far the hero drops on a missed web, until the player's next web catches. */
   missSag: 5,
 } as const;

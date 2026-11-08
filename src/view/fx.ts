@@ -15,7 +15,7 @@ export class WebLine {
   private readonly pos = new Float32Array(4 * 3);
   private travel = 0;
   private widthScale = 1;
-  private readonly recoveryColor = new Color(0x9aa3b8);
+  private readonly strayColor = new Color(0x9aa3b8);
   visible = false;
 
   constructor() {
@@ -28,12 +28,12 @@ export class WebLine {
     this.mesh.visible = false;
   }
 
-  /** A recovery web (after a missed cue) is grey and thinner than an earned one. */
-  shoot(recovery = false) {
+  /** A stray web (a rooftop shot at no portal) is grey and thinner than one that sticks. */
+  shoot(stray = false) {
     this.travel = 0;
     this.visible = true;
-    this.widthScale = recovery ? 0.55 : 1;
-    this.mesh.material.color.copy(recovery ? this.recoveryColor : pal("web"));
+    this.widthScale = stray ? 0.55 : 1;
+    this.mesh.material.color.copy(stray ? this.strayColor : pal("web"));
   }
 
   hide() {

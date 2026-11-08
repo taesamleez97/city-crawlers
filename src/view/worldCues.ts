@@ -6,7 +6,7 @@
 // out, pulses on every beat, and an outer ring closes onto it to land exactly on
 // its beat. There it locks on with a flash and holds: a solid disc drains over the
 // judge's late window, and the web counts until it empties. A hit splats a web
-// across it; a miss greys it out. Webs the hero fires by itself get no ring.
+// across it; a miss greys it out. Every web the hero fires answers a ring.
 //
 // Each lean is a chevron board bolted to the face of its girder, right in front of
 // the hero, pointing at the open gap: it stays in view all the way in, even as
@@ -29,8 +29,6 @@ import { LEAN_COLOR, LEFT_COLOR, RIGHT_COLOR } from "./cueStyle";
 /** Beats ahead a ring shows up, and how long its approach ring takes to close. */
 const RING_LEAD = 4;
 const APPROACH = 2;
-/** Beats a ring holds after its beat, waiting for the web. */
-const HOLD = HAND_HOLD / BEAT;
 /** Beats ahead a lean sign shows up, and how long its chevrons take to fill. */
 const SIGN_LEAD = 5;
 const FILL = 1.5;
@@ -196,6 +194,8 @@ type Ring = {
   cue: number;
   swing: number;
   fade: number;
+  /** Beat the web hit it, as shown (the punch was judged a little before it arrived). */
+  hitAt: number;
 };
 
 type Sign = {
@@ -211,6 +211,8 @@ type Popup = { sprite: Sprite; pos: Vector3; born: number; px: number; aspect: n
 
 export class WorldCues {
   readonly group = new Group();
+  /** The judge's punch lag (seconds): a ring holds that much longer after its beat. */
+  handLag = 0;
   private readonly rings: Ring[] = [];
   private readonly signs: Sign[] = [];
   private readonly popups: Popup[] = [];
@@ -255,7 +257,7 @@ export class WorldCues {
       root.add(h, ghost, timer, face, body, approach);
       root.visible = false;
       this.group.add(root);
-      this.rings.push({ root, body, ghost, face, timer, approach, halo: h, cue: -1, swing: -1, fade: 0 });
+      this.rings.push({ root, body, ghost, face, timer, approach, halo: h, cue: -1, swing: -1, fade: 0, hitAt: -1 });
     }
 
     const board = new PlaneGeometry(SIGN_W, SIGN_H);
@@ -356,7 +358,7 @@ export class WorldCues {
     for (const rt of rts) {
       const ahead = rt.cue.beat - beat;
       if (ahead > SIGN_LEAD) break;
-      if (rt.state !== "pending" || rt.cue.auto || ahead < -0.3) continue;
+      if (rt.state !== "pending" || ahead < -0.3) continue;
       if (rt.cue.kind === "hand") {
         if (ahead > RING_LEAD || this.rings.some((r) => r.cue === rt.cue.id)) continue;
         const r = this.rings.find((k) => k.cue < 0);
@@ -364,6 +366,7 @@ export class WorldCues {
           r.cue = rt.cue.id;
           r.swing = this.swingOf.get(rt.cue.id)!;
           r.fade = 0;
+          r.hitAt = -1;
           r.root.visible = true;
         }
       } else if (!this.signs.some((s) => s.cue === rt.cue.id)) {
@@ -429,8 +432,15 @@ export class WorldCues {
       apScale = 1;
       apOp = 1;
       ap.color.copy(WHITE);
-      timerK = clamp(1 - since / HOLD, 0, 1);
+      timerK = clamp(1 - (since * BEAT) / (HAND_HOLD + this.handLag), 0, 1);
       timer.color.copy(this.colors[side]).lerp(WHITE, 0.15 + 0.85 * flash);
+    } else if (rt.state === "skipped") {
+      // Waved through after a resume: no web, the ring just goes.
+      r.fade = Math.max(0, r.fade - dt * 5);
+      opacity = 1;
+      body.color.copy(this.colors[side]);
+      face.map = this.faces[side];
+      haloOp = 0;
     } else if (rt.state === "miss") {
       const since = beat - rt.cue.beat;
       r.fade = webSwing === r.swing || since < 1.2 ? 1 : Math.max(0, r.fade - dt * 4);
@@ -441,8 +451,9 @@ export class WorldCues {
       face.color.copy(GREY);
       haloOp = 0;
     } else {
-      // Hit, or waved through after a resume: the web is stuck to it until it lets go.
-      const since = rt.state === "hit" ? beat - (rt.cue.beat + (rt.offset ?? 0) / BEAT) : 1;
+      // Hit: the web is stuck to it until it lets go.
+      if (r.hitAt < 0) r.hitAt = beat;
+      const since = beat - r.hitAt;
       const k = Math.exp(-Math.max(0, since) * 6);
       r.fade = webSwing === r.swing || since < 0.6 ? 1 : Math.max(0, r.fade - dt * 5);
       opacity = 1;

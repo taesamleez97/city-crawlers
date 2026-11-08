@@ -167,13 +167,6 @@ export class Sfx {
     this.burst(0.32, 0.4, "bandpass", 600, 3200, 1.1);
   }
 
-  /** The auto web after a missed cue: duller than a real thwip. */
-  recover() {
-    if (!this.ready) return;
-    this.burst(0.14, 0.35, "bandpass", 1800, 500, 1.6);
-    this.tone(240, 0.12, "sine", 0.25, 0, 120);
-  }
-
   /** Calibration step done. */
   tick(step: number) {
     if (!this.ready) return;
