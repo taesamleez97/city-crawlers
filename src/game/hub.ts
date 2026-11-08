@@ -24,8 +24,8 @@ export const HUB_ORDER: CityId[] = ["seoul", "nyc", "tokyo", "la"];
  */
 const SLOTS: Record<CityId, { yaw: number; el: number }> = {
   seoul: { yaw: -0.64, el: 0.1 },
-  nyc: { yaw: -0.3, el: 0.33 },
-  tokyo: { yaw: 0.3, el: 0.33 },
+  nyc: { yaw: -0.3, el: 0.21 },
+  tokyo: { yaw: 0.3, el: 0.21 },
   la: { yaw: 0.64, el: 0.1 },
 };
 const RADIUS = 6;
@@ -65,9 +65,17 @@ export interface Portal {
   rim: MeshBasicMaterial;
   swirl: Mesh;
   label: Sprite;
+  labelArt: Label;
   color: Color;
   hover: number;
 }
+
+/** A portal's label canvas, redrawn when the city's best changes. */
+type Label = { c: HTMLCanvasElement; g: CanvasRenderingContext2D; tex: CanvasTexture; best: number };
+const LABEL_W = 560, LABEL_H = 300;
+/** World width of a label at rest; its top sits just under the ring. */
+const LABEL_SIZE = 15;
+const LABEL_Y = -(RADIUS + 0.65 + (LABEL_SIZE * LABEL_H) / LABEL_W / 2);
 
 export class Hub {
   readonly group = new Group();
@@ -114,13 +122,14 @@ export class Hub {
       const swirl = new Mesh(disc, new MeshBasicMaterial({ map: swirlTex, transparent: true, blending: AdditiveBlending, depthWrite: false, opacity: 0.55 }));
       swirl.position.z = 0.06;
       group.add(swirl);
-      const label = new Sprite(new SpriteMaterial({ map: this.keep(labelTexture(city)), depthTest: false, depthWrite: false, transparent: true }));
+      const labelArt = newLabel(city);
+      this.keep(labelArt.tex);
+      const label = new Sprite(new SpriteMaterial({ map: labelArt.tex, depthTest: false, depthWrite: false, transparent: true }));
       label.renderOrder = 20;
-      label.scale.set(15, 15 * (220 / 560), 1);
-      label.position.set(0, -(RADIUS + 3.6), 0.3);
+      label.position.set(0, LABEL_Y, 0.3);
       group.add(label);
       this.group.add(group);
-      this.portals.push({ city, group, center, scale, ring, rim, swirl, label, color, hover: 0 });
+      this.portals.push({ city, group, center, scale, ring, rim, swirl, label, labelArt, color, hover: 0 });
     }
   }
 
@@ -146,6 +155,16 @@ export class Hub {
     return this.portals.findIndex((p) => p.city.id === id);
   }
 
+  /** Each city's best score, under its name (nothing until there is one). */
+  setBest(best: Partial<Record<string, number>>) {
+    for (const p of this.portals) {
+      const b = best[p.city.id] ?? 0;
+      if (b === p.labelArt.best) continue;
+      p.labelArt.best = b;
+      drawLabel(p.labelArt, p.city);
+    }
+  }
+
   /** `hovered` grows and brightens; `chosen` (shot) pulls harder still. */
   update(dt: number, hovered: number, chosen = -1) {
     this.t += dt;
@@ -158,7 +177,8 @@ export class Hub {
       p.rim.opacity = 0.35 + 0.25 * pulse + 0.4 * Math.min(1, p.hover);
       p.swirl.rotation.z -= dt * (0.7 + 2.2 * p.hover);
       (p.swirl.material as MeshBasicMaterial).opacity = 0.45 + 0.35 * Math.min(1, p.hover);
-      p.label.scale.set(15 * (1 + 0.1 * p.hover), 15 * (220 / 560) * (1 + 0.1 * p.hover), 1);
+      const s = LABEL_SIZE * (1 + 0.1 * p.hover);
+      p.label.scale.set(s, (s * LABEL_H) / LABEL_W, 1);
     });
   }
 
@@ -188,32 +208,49 @@ function texture(c: HTMLCanvasElement) {
   return t;
 }
 
-/** The city's name, and its own script under it. */
-function labelTexture(city: CityStyle) {
-  const { c, g } = canvas(560, 220);
+function newLabel(city: CityStyle): Label {
+  const { c, g } = canvas(LABEL_W, LABEL_H);
+  const art = { c, g, tex: texture(c), best: 0 };
+  drawLabel(art, city);
+  return art;
+}
+
+/** The city's name, its own script (or the district) under it, then the best score if there is one. */
+function drawLabel(art: Label, city: CityStyle) {
+  const { g } = art;
+  const mid = LABEL_W / 2;
+  g.clearRect(0, 0, LABEL_W, LABEL_H);
   g.textAlign = "center";
   g.textBaseline = "middle";
   g.lineJoin = "round";
+  g.strokeStyle = "#1d2244";
   const name = city.name.toUpperCase();
   let size = 92;
   g.font = `${size}px Bungee, sans-serif`;
   while (g.measureText(name).width > 520 && size > 40) g.font = `${(size -= 4)}px Bungee, sans-serif`;
-  const y = city.local ? 82 : 110;
   g.lineWidth = 18;
-  g.strokeStyle = "#1d2244";
   g.fillStyle = "#1d2244";
-  g.fillText(name, 280, y + 9);
-  g.strokeText(name, 280, y);
+  g.fillText(name, mid, 70 + 9);
+  g.strokeText(name, mid, 70);
   g.fillStyle = "#ffffff";
-  g.fillText(name, 280, y);
-  if (city.local) {
-    g.font = `700 64px "Apple SD Gothic Neo", "Hiragino Sans", "Noto Sans CJK KR", "Noto Sans CJK JP", sans-serif`;
-    g.lineWidth = 14;
-    g.strokeText(city.local, 280, 172);
-    g.fillStyle = city.color;
-    g.fillText(city.local, 280, 172);
+  g.fillText(name, mid, 70);
+  const sub = city.local ?? city.area;
+  g.font = city.local
+    ? `700 64px "Apple SD Gothic Neo", "Hiragino Sans", "Noto Sans CJK KR", "Noto Sans CJK JP", sans-serif`
+    : `700 52px Fredoka, sans-serif`;
+  g.lineWidth = 14;
+  g.strokeText(sub, mid, 158);
+  g.fillStyle = city.color;
+  g.fillText(sub, mid, 158);
+  if (art.best > 0) {
+    g.font = `44px Bungee, sans-serif`;
+    g.lineWidth = 12;
+    const text = `BEST ${art.best.toLocaleString("en-US")}`;
+    g.strokeText(text, mid, 244);
+    g.fillStyle = "#ffcc2e";
+    g.fillText(text, mid, 244);
   }
-  return texture(c);
+  art.tex.needsUpdate = true;
 }
 
 /** Spiral arms that turn over the skyline: the portal's "through here". */

@@ -739,6 +739,7 @@ kbd {
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
+  padding-top: calc(var(--little-safe-top) + 44px);
 }
 .hub-head {
   display: flex;
@@ -777,37 +778,20 @@ kbd {
 .hub-prompt b {
   color: var(--gold);
 }
-.hub-cities .menu {
-  flex-direction: row;
-  gap: 24px;
-  min-width: 0;
-}
-.hub-cities .btn {
-  pointer-events: auto;
-}
-.hub-cities .btn.rich {
-  align-items: center;
-  min-width: 300px;
-  padding: 12px 30px 14px;
-  font-size: 40px;
-  text-align: center;
-}
-.hub-cities .city-name {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-.hub-cities .city-name i {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 4px var(--ink);
+/* The portals are the menu: the city buttons stay in the page for the remote and the agent, unseen. */
+.hub-cities {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 .hub-note {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: -30px;
+  bottom: calc(var(--little-safe-bottom) + 22px);
   text-align: center;
   font-size: 19px;
   font-weight: 600;

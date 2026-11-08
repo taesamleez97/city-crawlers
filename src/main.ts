@@ -21,7 +21,8 @@ if (little.isStub) {
 }
 
 async function boot() {
-  await document.fonts.load('40px "Bungee"').catch(() => undefined);
+  // The portal labels draw with both into canvases, so they must be ready first.
+  await Promise.all([document.fonts.load('40px "Bungee"'), document.fonts.load('700 40px "Fredoka"')]).catch(() => undefined);
   const lib = await PropLibrary.load((p) => hud.setLoading(p * 0.8));
   hud.setLoading(0.9);
   // Let the bar paint before the synchronous city build.

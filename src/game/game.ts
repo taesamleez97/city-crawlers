@@ -404,6 +404,7 @@ export class Game {
       if (!src || typeof src !== "object") continue;
       for (const c of CITIES) this.best[c.id] = Math.max(this.best[c.id] ?? 0, num((src as Best)[c.id]));
     }
+    this.hub?.setBest(this.best);
   }
 
   private saveBest() {
@@ -560,14 +561,17 @@ export class Game {
     for (const id of HUB_ORDER) this.loadCity(id).catch(() => undefined);
   }
 
+  /**
+   * The portals are the menu. The city buttons stay in the page, unseen, so the remote's
+   * arrows and OK and the Little agent drive them; the portal labels show the bests.
+   */
   private showHubMenu() {
+    this.hub.setBest(this.best);
     const items: MenuItem[] = this.hub.portals.map((p, i) => {
       const best = this.best[p.city.id] ?? 0;
-      const sub = [p.city.local ?? p.city.area, best > 0 ? `best ${best.toLocaleString("en-US")}` : ""].filter(Boolean).join(" · ");
       return {
         id: p.city.id,
-        label: p.city.name,
-        html: `<span class="city-name"><i style="background:${p.city.color}"></i>${p.city.name}</span><small>${sub}</small>`,
+        label: best > 0 ? `${p.city.name} (best ${best.toLocaleString("en-US")})` : p.city.name,
         action: "start_run",
         onSelect: () => this.shootPortal(i, this.shownSide),
       };
@@ -646,7 +650,7 @@ export class Game {
     if (source === "arm") prompt = hovered >= 0 ? `Punch to shoot a web at <b>${hoverName}</b>!` : "Aim at a portal";
     else if (live) prompt = "Raise an arm to aim at a city, then punch to shoot a web";
     else if (m.available) prompt = "Step in front of the camera, then raise an arm to aim";
-    else prompt = `Pick a city and press <b>OK</b> to shoot a web at it`;
+    else prompt = `Pick a portal with <b>◀ ▶</b> and press <b>OK</b> to shoot a web at it`;
     this.hud.setHubPrompt(prompt);
     this.hud.showPip(m.available);
     if (m.available) this.hud.pip.draw(m, NO_FOCUS, now);

@@ -15,8 +15,9 @@ pose as in play. Raise an arm and the reticle follows it; punch to shoot a web a
 portal it's on. The web zips you through, the screen whites out, and the run starts in
 that city. So the menu teaches the move the game uses.
 
-With the remote, Left and Right pick a city in the row along the bottom and OK shoots it.
-A mouse click shoots wherever the pointer is. A body shot only takes a portal once you've
+Each portal's label shows the city, its local name or district, and your best score there.
+With the remote, Left and Right move the reticle from portal to portal and OK shoots it. A
+mouse click shoots wherever the pointer is. A body shot only takes a portal once you've
 been tracked for a second and the reticle was already resting on it, so walking into frame
 doesn't pick a city by accident.
 
