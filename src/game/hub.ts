@@ -254,7 +254,7 @@ function drawLabel(art: Label, city: CityStyle) {
 }
 
 /** Spiral arms that turn over the skyline: the portal's "through here". */
-function swirlTexture() {
+export function swirlTexture() {
   const S = 256;
   const { c, g } = canvas(S, S);
   g.translate(S / 2, S / 2);

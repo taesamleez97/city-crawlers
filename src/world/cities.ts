@@ -33,6 +33,8 @@ export interface CityStyle {
   color: string;
   /** Neighborhood shown before the first street name. */
   area: string;
+  /** The city's runs by neighborhood, the portal's first: each its own map file (see `sectionOf`). */
+  sections: string[];
   sky: { top: string; horizon: string; sun: string; sunIntensity: number; hemiSky: string; hemiGround: string; sunDir: [number, number, number] };
   ground: string;
   road: string;
@@ -77,6 +79,7 @@ export const CITIES: CityStyle[] = [
     name: "New York",
     color: "#FFC23D",
     area: "Midtown",
+    sections: ["Midtown", "Times Square"],
     sky: { top: "#4FB2EE", horizon: "#D8EEF8", sun: "#FFF0D8", sunIntensity: 1.8, hemiSky: "#DDEFFF", hemiGround: "#A2958E", sunDir: [-0.45, 0.8, 0.4] },
     ground: "#CBC6BE",
     road: "#4A4F5B",
@@ -115,6 +118,7 @@ export const CITIES: CityStyle[] = [
     local: "東京",
     color: "#FF5DA2",
     area: "Nishi-Shinjuku",
+    sections: ["Nishi-Shinjuku", "Ome-kaido"],
     sky: { top: "#5E86DA", horizon: "#FFD3B5", sun: "#FFD9B0", sunIntensity: 1.6, hemiSky: "#FFE3D2", hemiGround: "#9C8C98", sunDir: [-0.75, 0.42, 0.35] },
     ground: "#D0D1D6",
     road: "#4F535E",
@@ -155,6 +159,7 @@ export const CITIES: CityStyle[] = [
     local: "서울",
     color: "#46B4FF",
     area: "Jongno",
+    sections: ["Jongno", "Cheonggyecheon"],
     sky: { top: "#3FA6F2", horizon: "#CFEAFC", sun: "#FFF4E2", sunIntensity: 1.85, hemiSky: "#DCEFFF", hemiGround: "#9A938E", sunDir: [-0.35, 0.75, 0.55] },
     ground: "#CDCDD0",
     road: "#4B505D",
@@ -195,6 +200,7 @@ export const CITIES: CityStyle[] = [
     name: "Los Angeles",
     color: "#FF8A3D",
     area: "Bunker Hill",
+    sections: ["Bunker Hill", "Financial District"],
     sky: { top: "#4FA3E6", horizon: "#FFE6BE", sun: "#FFE2B8", sunIntensity: 1.9, hemiSky: "#FFF0DA", hemiGround: "#B09A86", sunDir: [-0.7, 0.55, 0.45] },
     ground: "#D6CFC2",
     road: "#525661",
@@ -229,3 +235,13 @@ export const CITIES: CityStyle[] = [
 ];
 
 export const cityById = (id: string): CityStyle | undefined => CITIES.find((c) => c.id === id);
+
+/** One run through a city: `key` names its map file (public/cities/<key>.json) and its best score. */
+export type Section = { city: CityStyle; index: number; key: string; area: string };
+
+/** A city's section by index, wrapping round (the one after the last is the first again). */
+export function sectionOf(city: CityStyle, index: number): Section {
+  const n = city.sections.length;
+  const i = ((index % n) + n) % n;
+  return { city, index: i, key: i ? `${city.id}-${i + 1}` : city.id, area: city.sections[i] };
+}

@@ -17,9 +17,13 @@ import type { PropLibrary } from "./props";
 
 export interface CityFile {
   id: string;
+  /** Which of the city's runs (1 is the first), and its neighborhood. */
+  section?: number;
+  area?: string;
   attribution: string;
   license: string;
-  route: { path: Array<[number, number]>; streets: string[]; perch: number[] };
+  /** `perch`: the start roof's footprint; `finish`: the roof just past the end the hero lands on. */
+  route: { path: Array<[number, number]>; streets: string[]; perch: number[]; finish?: number[] };
   landmarks: Array<{ id: string; x: number; z: number; y: number; yaw?: number }>;
   /** [height (dm, -1 unknown), min height (dm), type, colour 0xRRGGBB (0 none), landmark id, ring (dm)] */
   buildings: Array<[number, number, number, number, string, number[]]>;
@@ -36,14 +40,20 @@ export interface RealCity {
   world: CollisionWorld;
   lanes: TrafficLane[];
   course: CourseDef;
+  /** Where the hero stands after the finish (roof height, meters) and which way is back down the route. */
+  finishRoof: FinishRoof | null;
   /** Distance-culled meshes. */
   chunks: Mesh[];
   stats: { buildings: number; trees: number; signs: number; triangles: number; chunks: number; ms: number };
   dispose(): void;
 }
 
+export type FinishRoof = { x: number; y: number; z: number; fx: number; fz: number };
+
 /** Roof of the block the hero leaps from (meters). */
 export const PERCH_Y = 34;
+/** The finish roof sits this far under the finish ring, so the glide past it clears its props. */
+const FINISH_DROP = 9;
 const CHUNK = 160;
 /** Buildings this close to the route get colliders (web anchors, ring sight lines). */
 const COLLIDE_DIST = 260;
@@ -234,6 +244,7 @@ export function buildRealCity(data: CityFile, style: CityStyle, material: Materi
   group.name = `city_${data.id}`;
   const path = data.route.path.map(([x, z]) => [x / 10, z / 10] as [number, number]);
   const perch = dmToM(data.route.perch);
+  const finish = data.route.finish ? dmToM(data.route.finish) : null;
 
   const routeDist = (x: number, z: number) => {
     let best = Infinity;
@@ -278,11 +289,12 @@ export function buildRealCity(data: CityFile, style: CityStyle, material: Materi
     }
     return false;
   };
-  const inPerch = (x: number, z: number, pad = 0) => {
-    if (insidePoly(perch, x, z)) return true;
+  const inRoof = (ring: Float32Array, x: number, z: number, pad: number) => {
+    if (insidePoly(ring, x, z)) return true;
     if (!pad) return false;
-    return insidePoly(perch, x + pad, z) || insidePoly(perch, x - pad, z) || insidePoly(perch, x, z + pad) || insidePoly(perch, x, z - pad);
+    return insidePoly(ring, x + pad, z) || insidePoly(ring, x - pad, z) || insidePoly(ring, x, z + pad) || insidePoly(ring, x, z - pad);
   };
+  const inPerch = (x: number, z: number, pad = 0) => inRoof(perch, x, z, pad) || (!!finish && inRoof(finish, x, z, pad));
 
   // ---------------------------------------------------------------- buildings
   type Built = { poly: Float32Array; h: number; min: number; cx: number; cz: number; dist: number; type: number };
@@ -437,6 +449,49 @@ export function buildRealCity(data: CityFile, style: CityStyle, material: Materi
     props.push({ type: "ac_unit", x: ax, y: PERCH_Y, z: az, rotY: rot, scale: 1 });
     const [bx, bz] = at(hr * 0.6, d * 0.75);
     props.push({ type: "ac_unit", x: bx, y: PERCH_Y, z: bz, rotY: rot + Math.PI / 2, scale: 1 });
+  }
+
+  // ---------------------------------------------------------------- the finish roof
+  let finishRoof: FinishRoof | null = null;
+  if (finish) {
+    const n = path.length;
+    const [ex, ez] = path[n - 1], [px, pz] = path[n - 2];
+    const len = Math.hypot(ex - px, ez - pz);
+    const fx = (ex - px) / len, fz = (ez - pz) / len, rx = -fz, rz = fx;
+    // Its near edge (facing back down the route) and its extent from there.
+    let near = Infinity, far = 0, hr = 0;
+    for (let i = 0; i < finish.length; i += 2) {
+      const dx = finish[i] - ex, dz = finish[i + 1] - ez;
+      const f = dx * fx + dz * fz;
+      near = Math.min(near, f);
+      far = Math.max(far, f);
+      hr = Math.max(hr, Math.abs(dx * rx + dz * rz));
+    }
+    const top = (style.swingY ?? 30) - 5 - FINISH_DROP;
+    const d = far - near, hf = d / 2;
+    const ccx = ex + fx * (near + hf), ccz = ez + fz * (near + hf);
+    const b = chunkFor(ccx, ccz);
+    const brick = style.waterTowers ? lin("#A85A48") : lin(style.walls[2] ?? style.walls[0]);
+    b.prism(finish, triangulate(finish), 0, top, brick, lin(style.roof[1] ?? style.roof[0]),
+      { style: Facade.Grid, seed: 9, groundH: 4.6, window: lin(style.window), baseY: 0, topY: top - 1 });
+    world.addPrism(finish, 0, top, "building", true);
+    b.obox(ccx, ccz, fx, fz, hr + 0.5, hf + 0.5, top - 1, top - 0.2, lin(style.trim));
+    // A parapet along the edge the hero looks out over, striped like the start roof's.
+    const lipX = ex + fx * (near + 0.4), lipZ = ez + fz * (near + 0.4);
+    b.obox(lipX, lipZ, fx, fz, hr, 0.35, top, top + 0.55, lin("#E7DCC3"), lin("#F4F1EA"));
+    b.obox(lipX, lipZ, fx, fz, 4, 0.35, top + 0.55, top + 0.65, rgb("hazard"));
+    const tile = shade(lin(style.roof[1] ?? style.roof[0]), 0.8);
+    for (let o = -hr + 4; o < hr; o += 4) {
+      b.strip(ccx + rx * o - fx * (hf - 0.8), ccz + rz * o - fz * (hf - 0.8), ccx + rx * o + fx * hf, ccz + rz * o + fz * hf, 0.24, top + 0.01, tile);
+    }
+    const at = (r: number, f: number) => [ex + rx * r + fx * (near + f), ez + rz * r + fz * (near + f)];
+    const rot = Math.atan2(fx, fz);
+    const [tx, tz] = at(hr * 0.62, d * 0.7);
+    props.push({ type: style.waterTowers ? "water_tower" : "antenna", x: tx, y: top, z: tz, rotY: rot - 0.4, scale: 1 });
+    const [ax, az] = at(-hr * 0.5, d * 0.62);
+    props.push({ type: "ac_unit", x: ax, y: top, z: az, rotY: rot, scale: 1 });
+    const [sx, sz] = at(0, 3.2);
+    finishRoof = { x: sx, y: top, z: sz, fx: -fx, fz: -fz };
   }
 
   // ---------------------------------------------------------------- ground, areas, water, rail
@@ -748,7 +803,7 @@ export function buildRealCity(data: CityFile, style: CityStyle, material: Materi
     topY: style.swingY,
   };
   return {
-    group, world, lanes, course, chunks: meshes,
+    group, world, lanes, course, finishRoof, chunks: meshes,
     stats: { buildings: built.length, trees, signs: signCount, triangles: Math.round(triangles), chunks: chunks.size, ms: Math.round(performance.now() - t0) },
     dispose() {
       group.traverse((o) => (o as Mesh).geometry?.dispose());

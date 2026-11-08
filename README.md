@@ -6,9 +6,22 @@ shoot each web yourself by punching an arm up and out on the beat, and lean to d
 girders. Three.js + Vite + TypeScript, built as a Little app (a website plus
 `/little/manifest.json`).
 
+## The opening
+
+The game boots into a ten-second title film (`src/view/intro.ts`, animated with GSAP). Three
+comic panels wipe in over stills from the game itself, each with a slow push and a word-by-word
+caption: swing real streets, shoot on the beat (a ring closes and bursts), lean to dodge. A
+four-city page follows. Then the logo builds piece by piece over sunburst rays: the comic web
+spins out, the skyline rises, CITY slams in and CRAWLERS slides after it. A portal opens at
+the hub of the web and widens until it shows the live rooftop. A punch, OK or a click skips
+straight to the portal, and the rooftop stays inert until the film has gone.
+
+The stills are in `public/stills` (1280×720 JPEGs, captured from the running game). Capture
+them again if the cities' look changes.
+
 ## The rooftop
 
-The game opens on a rooftop above the procedural downtown. Portals hang on the buildings
+After the film comes a rooftop above the procedural downtown. Portals hang on the buildings
 around you, one per city: **Seoul** (Jongno), **New York** (Midtown), **Tokyo**
 (Nishi-Shinjuku) and **Los Angeles** (Bunker Hill). One hand is up in the same web-shooter
 pose as in play. Raise an arm and the reticle follows it; punch to shoot a web at the
@@ -33,17 +46,30 @@ Seoul, green ones in Tokyo, palms in LA), traffic, signboards (stacked boards in
 vertical neon in Tokyo), landmark dressing, and a skyline backdrop (the mountains and
 N Seoul Tower; Mt Fuji, Tokyo Tower and the Skytree; the Hollywood sign).
 
+Every city has two areas, each its own route through the same extract:
+
+| City | First area (the portal) | Next area |
+|---|---|---|
+| Seoul | Jongno | Cheonggyecheon |
+| New York | Midtown (Fifth Avenue, 42nd Street) | Times Square (Sixth Avenue, West 42nd) |
+| Tokyo | Nishi-Shinjuku | Ome-kaido |
+| Los Angeles | Bunker Hill | Financial District |
+
 Google Maps can't be used for this. Its terms forbid deriving geometry from map data or
 imagery, and caching or bulk-downloading it (see `docs/RESEARCH.md` §3).
 
 ```bash
 python3 -m venv tools/osm/.venv && tools/osm/.venv/bin/pip install duckdb   # once
 node tools/osm/fetch.mjs [city…]   # Overture (S3) → tools/osm/cache (not committed)
-node tools/osm/build.mjs [city…]   # cache → public/cities/<id>.json (committed, ODbL)
+node tools/osm/build.mjs [city…]   # cache → public/cities/<id>.json, <id>-2.json (committed, ODbL)
 ```
 
-Play areas, routes and landmarks are set in `tools/osm/cities.mjs`. You can check a build
-at `/tools/osm/preview.html?city=<id>` on the dev server.
+Play areas, routes and landmarks are set in `tools/osm/cities.mjs`. A city's `sections`
+list adds its other areas: each entry has an `area` name and a `route`, and can override
+anything else (landmarks, perch). The build writes each to `<id>-2.json`, `<id>-3.json` and
+so on, and clears a start perch and a finish roof along every route. Keep routes near the
+middle of the ±1 km extract so its edges stay out past the fog. You can check a build at
+`/tools/osm/preview.html?city=<id>` on the dev server.
 
 ## How it plays
 
@@ -82,15 +108,34 @@ thrown on the beat is then judged on the beat, and the ring's hold lasts that mu
 
 The remote never plays the game; it only drives menus (OK, Back, arrows).
 
+### The end of a run
+
+The route ends at a finish ring. The hero flies through it, drops onto a roof across the
+street, and turns to look back down the route. The score card counts up (score, grade,
+stars, best, then accuracy, combo and hit counts) and settles at the bottom. Then targets
+hang in the sky, chosen the same way as the rooftop portals (aim with an arm, punch to web
+one):
+
+- **Next area**: the city's other area. It only appears once that area's map has loaded
+  and its route checks out. After the last area it wraps to the first.
+- **Replay**: the same area again.
+- **Choose city**: back to the rooftop.
+
+With the remote, Left and Right move between targets and OK takes one. The Little agent
+has `next_area`, `restart_run` and `go_rooftop` for the same three.
+
 ### Camera guidance
 
 - **Get Ready screen** (before every run): a live mirror of the camera with your skeleton
   drawn over it, a dashed "stand like this" outline, and the two targets where your fists
   land at full stretch. Steps: find your spot (the box turns green when both raised fists
   fit), then the first time only: shoot right, shoot left (skipping an arm you already
-  used on the rooftop), lean left, lean right. After that it's just finding your spot. OK,
-  or punching both arms at once, skips ahead once you're tracked. Both arms at once is
-  also OK on the pause and results menus.
+  used on the rooftop), lean left, lean right. After that it's just finding your spot.
+  Beside the mirror, a looping clip (`src/view/tutorial.ts`) acts out the current step on
+  a game still: the ring closing and the punch that hits it, or the view tilting past a
+  girder as the figure leans. A row of chips under it ticks off each step. OK, or punching
+  both arms at once, skips ahead once you're tracked. Both arms at once is also OK on the
+  pause menu.
 - **In play**: the city fills the screen and the 3D arms copy yours. A small camera view
   comes up at the bottom center only while your framing needs fixing, and hides again once
   you're back in your spot.
@@ -161,6 +206,8 @@ and pose tracking.
 | `?keys` | desk testing without a camera: Q/E shoot left/right webs, A/D lean |
 | `?autoplay` | a bot plays every cue perfectly (`?autoplay=miss` drops every fourth); goes straight to a city and never opens the camera |
 | `?city=seoul\|nyc\|tokyo\|la` | the city to aim at on the rooftop (with `?autoplay`, the city it plays) |
+| `?area=2` | with `?autoplay`, play the city's second area |
+| `?nointro` | skip the opening film (`?autoplay` skips it too) |
 | `?motionOffset=<ms>` | extra pose latency to subtract from shot times, if hits read consistently late on hardware |
 | `?accuracy=high` | ask the pose tracker for its high-accuracy mode (on the Mac: the heavy model) |
 | `?quality=low\|medium\|high\|ultra` | lock a quality tier (default: adaptive, starts at medium) |
@@ -187,14 +234,16 @@ picture is only held while a guide screen is up, so it costs nothing during play
 
 ```
 src/
-  game/      game.ts (state machine, rooftop, travel, get-ready steps, scoring, Little
-             tools), hub.ts (rooftop portals and aiming), subject.ts
+  game/      game.ts (state machine, rooftop, travel, get-ready steps, scoring, finish
+             roof, Little tools), hub.ts (rooftop portals and aiming), targets.ts (the
+             choices in the sky after a run), subject.ts
   input/     motion.ts (pose → web-shoot and lean gestures, framing checks)
   rhythm/    song.ts (the chart), music.ts (synth + Conductor clock), judge.ts (timing
              windows), route.ts (rails, ring placement), dressing.ts (coins, girders, finish)
   view/      worldCues.ts (rings, girder boards and grade popups in the city), bodyGuide.ts
              (camera mirror and pip), cueStyle.ts (icons, figures), hud.ts, arms.ts (IK arms
-             that copy the player), cameraRig.ts, fx.ts
+             that copy the player), cameraRig.ts, fx.ts, logo.ts (the title art),
+             intro.ts (opening film), tutorial.ts (Get Ready clips)
   world/     realCity.ts (a city from map data), cities.ts (each city's look),
              backdrop.ts (skyline ridges and towers), cityLayout.ts / city.ts /
              buildings.ts (the procedural rooftop downtown), collision.ts, props.ts (GLB
@@ -203,7 +252,8 @@ src/
   platform/  little.ts (SDK wrapper: motion, camera, tools), webcam.ts (desktop stand-in),
              little-stub.ts
 public/little/manifest.json   capabilities: sense.motion, media.camera
-public/cities/                processed map data per city (ODbL, see Credits)
+public/cities/                processed map data per city and area (ODbL, see Credits)
+public/stills/                game stills for the opening film and the Get Ready clips
 tools/osm/                    map data pipeline: cities.mjs, fetch.mjs, build.mjs, preview
 tools/blender/                headless Blender scripts (build, adapt, preview)
 tools/pipeline/               npm run assets: Blender → glTF-Transform → public/models
@@ -223,3 +273,4 @@ previews/                     reference renders and in-game screenshots
 - Kenney Starter Kits (City Builder, Racing): CC0, https://kenney.nl
 - PSX First Person Arms by Drillimpact: CC0, https://drillimpact.itch.io/psx-first-person-arms-free
 - Bungee and Fredoka fonts: SIL Open Font License (`public/fonts/OFL-*.txt`)
+- GSAP: free under its standard license, https://gsap.com/standard-license

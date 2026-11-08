@@ -274,90 +274,197 @@ body {
   flex-direction: column;
   gap: 26px;
 }
-.step-now {
-  display: flex;
-  align-items: center;
-  gap: 22px;
-  padding: 20px 24px;
-  border-radius: 28px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 4px solid var(--gold);
+/* The step's demo (see src/view/tutorial.ts): a 16:9 gameplay still with a looping overlay. */
+.step-demo {
+  position: relative;
+  width: 540px;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 24px;
+  background: #0e1228;
+  box-shadow: 0 0 0 5px var(--gold);
   animation: panelin 0.35s cubic-bezier(0.2, 1.4, 0.4, 1) both;
 }
-.step-now.done {
-  border-color: var(--mint);
+.step-demo > img,
+.demo-view,
+.demo-view img,
+.demo-fx {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
-.step-now div > b {
+.demo-view img.mirrored {
+  transform: scaleX(-1);
+}
+.demo-now,
+.demo-stamp {
+  position: absolute;
+  font-family: "Bungee", sans-serif;
+  font-weight: normal;
+  line-height: 1;
+  white-space: nowrap;
+  paint-order: stroke fill;
+  text-shadow: 0 5px 0 var(--ink);
+}
+.demo-now {
+  margin: -96px 0 0 24px;
+  font-size: 44px;
+  color: var(--gold);
+  -webkit-text-stroke: 9px var(--ink);
+  transform: scale(0);
+}
+.demo-stamp {
+  left: 50%;
+  top: 50%;
+  margin: -50px 0 0 -90px;
+  font-size: 100px;
+  color: var(--mint);
+  -webkit-text-stroke: 14px var(--ink);
+}
+.demo-fig {
+  position: absolute;
+  bottom: 12px;
+  width: 112px;
+  height: 112px;
+  padding: 6px;
+  border-radius: 20px;
+  background: rgba(14, 18, 40, 0.78);
+}
+.demo-fig.at-left {
+  left: 12px;
+}
+.demo-fig.at-right {
+  right: 12px;
+}
+.demo-fig svg {
+  width: 100%;
+  height: 100%;
+}
+.demo-chev {
+  position: absolute;
+  top: 50%;
+  margin-top: -50px;
+  display: flex;
+  gap: 2px;
+  filter: drop-shadow(0 5px 0 var(--ink));
+}
+.demo-chev.right {
+  right: 28px;
+}
+.demo-chev.left {
+  left: 28px;
+  transform: scaleX(-1);
+}
+.demo-chev i {
+  width: 50px;
+  height: 100px;
+  background: var(--c);
+  clip-path: polygon(0 0, 46% 0, 100% 50%, 46% 100%, 0 100%, 54% 50%);
+}
+.step-demo.frame {
+  background: radial-gradient(circle at 50% 40%, #2a3366, #0e1228);
+}
+.demo-box {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 190px;
+  height: 236px;
+  margin: -118px 0 0 -95px;
+  border: 6px dashed var(--gold);
+  border-radius: 18px;
+}
+.demo-person {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 200px;
+  height: 200px;
+  margin: -100px 0 0 -100px;
+}
+.demo-person svg {
+  width: 100%;
+  height: 100%;
+}
+.demo-ok {
+  position: absolute;
+  right: 150px;
+  top: 34px;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
+  color: var(--ink);
+  background: var(--mint);
+  box-shadow: 0 5px 0 var(--ink);
+}
+.step-demo.ready {
+  box-shadow: 0 0 0 5px var(--mint);
+}
+.step-text > b {
   display: block;
   font-size: 40px;
   line-height: 1.1;
 }
-.step-now p b {
-  font-weight: 700;
-}
-.step-now p {
-  margin: 10px 0 0;
+.step-text p {
+  margin: 8px 0 0;
   font-size: 27px;
   font-weight: 500;
   line-height: 1.3;
   opacity: 0.9;
 }
-.step-fig {
-  flex: none;
-  width: 150px;
-  height: 150px;
-  border-radius: 24px;
-  background: rgba(14, 18, 40, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.step-text p b {
+  font-weight: 700;
 }
-.step-fig svg {
-  width: 130px;
-  height: 130px;
-}
+/* Progress: one chip per step, with its figure. */
 .steps {
   margin: 0;
   padding: 0;
   list-style: none;
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: 28px;
-  font-weight: 600;
-  counter-reset: step;
+  gap: 14px;
 }
 .steps li {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  opacity: 0.5;
-  counter-increment: step;
+  position: relative;
+  width: 76px;
+  height: 76px;
+  padding: 6px;
+  border-radius: 18px;
+  background: rgba(14, 18, 40, 0.6);
+  opacity: 0.45;
 }
-.steps li::before {
-  content: counter(step);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.15);
-  font-family: "Bungee", sans-serif;
-  font-size: 20px;
+.steps li svg {
+  width: 100%;
+  height: 100%;
 }
-.steps li.done,
 .steps li.cur {
   opacity: 1;
+  box-shadow: 0 0 0 4px var(--gold);
 }
-.steps li.done::before {
+.steps li.done {
+  opacity: 1;
+}
+.steps li.done::after {
   content: "✓";
+  position: absolute;
+  right: -8px;
+  top: -8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink);
   background: var(--mint);
-  color: var(--ink);
-}
-.steps li.cur::before {
-  background: var(--gold);
-  color: var(--ink);
 }
 .guide-msg {
   font-size: 30px;
@@ -590,11 +697,6 @@ kbd {
   font-weight: 600;
   opacity: 0.8;
 }
-.result-head {
-  display: flex;
-  align-items: center;
-  gap: 48px;
-}
 .grade {
   font-size: 220px;
   line-height: 0.9;
@@ -690,6 +792,270 @@ kbd {
   width: 0;
   background: var(--orange);
   transition: width 200ms;
+}
+
+/* ---------------------------------------------------------------- intro (see src/view/intro.ts) */
+.intro {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  overflow: hidden;
+  pointer-events: none;
+  font-family: "Bungee", "Fredoka", sans-serif;
+  color: #fff;
+  background: #1d2244 radial-gradient(rgba(255, 255, 255, 0.08) 22%, transparent 26%) 0 0 / 26px 26px;
+}
+.intro-film,
+.intro-page,
+.intro-title {
+  position: absolute;
+  inset: 0;
+}
+.intro-page {
+  background: inherit;
+}
+.intro-panel,
+.intro-cell {
+  border: 10px solid #fff;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+}
+.intro-panel::after,
+.intro-cell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 6px var(--ink);
+}
+.intro-panel {
+  position: absolute;
+  inset: 34px 40px;
+  visibility: hidden;
+}
+.intro-panel:nth-child(1) {
+  transform: rotate(-1.2deg);
+}
+.intro-panel:nth-child(2) {
+  transform: rotate(1deg);
+}
+.intro-panel:nth-child(3) {
+  transform: rotate(-0.8deg);
+}
+/* Always 16:9 like the stills, centered, so overlays sit where the game drew them. */
+.intro-shot {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin-top: -28.125%;
+}
+.intro-shot img,
+.intro-cell img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.intro-tag {
+  position: absolute;
+  left: 56px;
+  top: 52px;
+  padding: 12px 30px 6px;
+  font-size: 46px;
+  line-height: 1;
+  color: var(--ink);
+  background: var(--c);
+  border: 6px solid var(--ink);
+  border-radius: 14px;
+  box-shadow: 0 8px 0 var(--ink);
+  transform: rotate(-3deg);
+}
+.intro-line {
+  position: absolute;
+  left: 70px;
+  bottom: 74px;
+  max-width: 1600px;
+  font-size: 118px;
+  line-height: 1.05;
+  text-transform: uppercase;
+  paint-order: stroke fill;
+  -webkit-text-stroke: 18px var(--ink);
+  text-shadow: 4px 14px 0 var(--ink);
+  transform: rotate(-4deg);
+  transform-origin: left bottom;
+}
+.intro-line .w {
+  display: inline-block;
+}
+.intro-ring {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+.intro-ring .approach,
+.intro-ring .burst {
+  position: absolute;
+  left: -100px;
+  top: -100px;
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+}
+.intro-ring .approach {
+  border: 10px solid #fff;
+  box-shadow: 0 0 0 5px var(--ink), inset 0 0 0 5px var(--ink);
+  opacity: 0;
+}
+.intro-ring .burst {
+  background: repeating-conic-gradient(#fff 0 9deg, transparent 9deg 30deg);
+  -webkit-mask-image: radial-gradient(circle, transparent 34%, #000 36%, #000 58%, transparent 70%);
+  mask-image: radial-gradient(circle, transparent 34%, #000 36%, #000 58%, transparent 70%);
+  opacity: 0;
+}
+.intro-ring .now {
+  position: absolute;
+  left: 90px;
+  top: -40px;
+  font-size: 96px;
+  font-weight: normal;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--gold);
+  paint-order: stroke fill;
+  -webkit-text-stroke: 16px var(--ink);
+  text-shadow: 0 10px 0 var(--ink);
+  transform: scale(0);
+}
+.intro-lean {
+  position: absolute;
+  right: 110px;
+  top: 50%;
+  margin-top: -90px;
+  display: flex;
+  gap: 4px;
+  filter: drop-shadow(0 8px 0 var(--ink));
+}
+.intro-lean.left {
+  right: auto;
+  left: 110px;
+  transform: scaleX(-1);
+}
+.intro-lean i {
+  width: 96px;
+  height: 180px;
+  background: var(--cue-lean);
+  clip-path: polygon(0 0, 46% 0, 100% 50%, 46% 100%, 0 100%, 54% 50%);
+}
+.intro-page {
+  visibility: hidden;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 30px;
+  padding: 44px 56px;
+}
+.intro-cell {
+  position: relative;
+}
+.intro-cell-shot {
+  position: absolute;
+  inset: 0;
+}
+.intro-cell b {
+  position: absolute;
+  left: 30px;
+  bottom: 24px;
+  font-size: 68px;
+  font-weight: normal;
+  line-height: 1;
+  color: var(--c);
+  paint-order: stroke fill;
+  -webkit-text-stroke: 15px var(--ink);
+  text-shadow: 0 9px 0 var(--ink);
+}
+.intro-title {
+  visibility: hidden;
+  overflow: hidden;
+  background: linear-gradient(#56bdf0, #d2f1fc);
+}
+.intro-rays {
+  position: absolute;
+  width: 3400px;
+  height: 3400px;
+  margin: -1700px 0 0 -1700px;
+  border-radius: 50%;
+  background: repeating-conic-gradient(rgba(255, 255, 255, 0.24) 0 7deg, rgba(255, 255, 255, 0) 7deg 18deg);
+  -webkit-mask-image: radial-gradient(circle, #000 12%, transparent 62%);
+  mask-image: radial-gradient(circle, #000 12%, transparent 62%);
+}
+.intro-logo {
+  position: absolute;
+}
+.intro-logo .logo-art {
+  width: 100%;
+}
+.intro-cities {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 858px;
+  display: flex;
+  justify-content: center;
+  gap: 34px;
+  font-size: 50px;
+  line-height: 1;
+}
+.intro-cities span {
+  display: inline-block;
+  color: var(--c);
+  paint-order: stroke fill;
+  -webkit-text-stroke: 13px var(--ink);
+  text-shadow: 0 8px 0 var(--ink);
+}
+.intro-portal {
+  position: absolute;
+  width: 0;
+  height: 0;
+  visibility: hidden;
+}
+.intro-swirl,
+.intro-rim {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 50%;
+}
+.intro-swirl {
+  background-size: cover;
+  background-position: center;
+}
+/* The ring's width matches RIM in intro.ts. */
+.intro-rim {
+  -webkit-mask-image: radial-gradient(closest-side, transparent calc(100% - 40px), #000 calc(100% - 39px));
+  mask-image: radial-gradient(closest-side, transparent calc(100% - 40px), #000 calc(100% - 39px));
+}
+.intro-flash {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  opacity: 0;
+}
+.intro-skip {
+  position: absolute;
+  right: calc(var(--little-safe-right) + 44px);
+  bottom: calc(var(--little-safe-bottom) + 36px);
+  padding: 12px 32px;
+  border-radius: 999px;
+  background: var(--ink-soft);
+  font-family: "Fredoka", sans-serif;
+  font-weight: 600;
+  font-size: 30px;
+}
+.intro-skip b {
+  color: var(--gold);
 }
 
 .boot-error {
@@ -792,6 +1158,122 @@ kbd {
   opacity: 0.85;
   text-shadow: 0 2px 0 var(--ink);
 }
+/* ---------------------------------------------------------------- after a run: the finish roof */
+.overlay.finale-mode {
+  align-items: stretch;
+  background: linear-gradient(
+    180deg,
+    rgba(16, 20, 44, 0.5) 0%,
+    rgba(16, 20, 44, 0) 24%,
+    rgba(16, 20, 44, 0) 62%,
+    rgba(16, 20, 44, 0.6) 100%
+  );
+  pointer-events: none;
+}
+.finale {
+  position: relative;
+  flex: 1;
+}
+.finale-head {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(var(--little-safe-top) + 34px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.finale-where {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-shadow: 0 3px 0 var(--ink);
+}
+.finale-title {
+  font-family: "Bungee", "Fredoka", sans-serif;
+  font-size: 84px;
+  line-height: 1;
+  color: var(--gold);
+  paint-order: stroke fill;
+  -webkit-text-stroke: 14px var(--ink);
+  text-shadow: 0 9px 0 var(--ink);
+}
+.finale-prompt {
+  margin-top: 14px;
+  padding: 10px 32px;
+  border-radius: 999px;
+  background: var(--ink-soft);
+  font-size: 32px;
+  font-weight: 600;
+}
+.finale-prompt:empty {
+  display: none;
+}
+.finale-prompt b {
+  color: var(--gold);
+}
+.finale-card {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--little-safe-bottom) + 58px);
+  margin-left: -720px;
+  width: 1440px;
+  display: flex;
+  align-items: center;
+  gap: 44px;
+  padding: 22px 44px;
+  border-radius: 40px;
+  background: var(--ink-soft);
+  border: 6px solid rgba(255, 255, 255, 0.16);
+}
+.finale-card .grade {
+  font-size: 170px;
+  animation: none;
+}
+.fc-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 430px;
+}
+.finale-card .final {
+  font-size: 104px;
+  font-variant-numeric: tabular-nums;
+}
+.fc-sub {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+.finale-card .star {
+  font-size: 64px;
+}
+.finale-card .star.on {
+  animation: none;
+}
+.finale-card .newbest {
+  font-size: 34px;
+}
+.finale-card .bestline {
+  font-size: 30px;
+}
+.finale-card .rows {
+  flex: 1;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 30px;
+  font-size: 26px;
+}
+/* The choices are in the sky: their buttons stay in the page for the remote and the agent, unseen. */
+.finale-choices {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .reticle {
   position: absolute;
   left: 0;

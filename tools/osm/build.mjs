@@ -1,8 +1,8 @@
 // Turns the raw map extracts (tools/osm/cache, from fetch.mjs: OpenStreetMap as
 // packaged by Overture Maps) into the compact city files the game loads
-// (public/cities/<id>.json):
+// (public/cities/<id>.json, and <id>-2.json… for the city's other sections):
 //
-//   node tools/osm/build.mjs [city…]            build
+//   node tools/osm/build.mjs [city|section…]    build
 //   node tools/osm/build.mjs --explore <city>   list streets and tall buildings
 //
 // Coordinates are local meters around each city's origin (+x east, +z south),
@@ -180,6 +180,22 @@ function perchRing(route, w, d) {
   return ringArea(corners) > 0 ? corners.reverse() : corners;
 }
 
+/** The roof the hero lands on after the finish: a block across the street just past the end. */
+function finishRing(route, w, d, gap = 16) {
+  const n = route.path.length;
+  const [ex, ez] = route.path[n - 1], [px, pz] = route.path[n - 2];
+  const len = Math.hypot(ex - px, ez - pz);
+  const fx = (ex - px) / len, fz = (ez - pz) / len;
+  const rx = -fz, rz = fx;
+  const corners = [
+    [ex + fx * gap - rx * w / 2, ez + fz * gap - rz * w / 2],
+    [ex + fx * gap + rx * w / 2, ez + fz * gap + rz * w / 2],
+    [ex + fx * (gap + d) + rx * w / 2, ez + fz * (gap + d) + rz * w / 2],
+    [ex + fx * (gap + d) - rx * w / 2, ez + fz * (gap + d) - rz * w / 2],
+  ];
+  return ringArea(corners) > 0 ? corners.reverse() : corners;
+}
+
 // ------------------------------------------------------------------ build
 function closedRing(pts) {
   const r = pts.slice();
@@ -241,8 +257,9 @@ async function build(city) {
     if (p.height === undefined && p.owner?.height !== undefined) p.height = p.owner.height;
   }
 
-  // Clear the flight corridor and the perch footprint.
+  // Clear the flight corridor and the perch and finish roof footprints.
   const perch = perchRing(route, city.perch?.w ?? 24, city.perch?.d ?? 30);
+  const finish = finishRing(route, city.perch?.w ?? 24, 26);
   const kept = [];
   let dropped = 0;
   for (const b of all) {
@@ -252,7 +269,7 @@ async function build(city) {
       dropped++;
       continue;
     }
-    if (ringToPolyline(b.ring, [...perch, perch[0]]) < 0.5) {
+    if (ringToPolyline(b.ring, [...perch, perch[0]]) < 0.5 || ringToPolyline(b.ring, [...finish, finish[0]]) < 0.5) {
       dropped++;
       continue;
     }
@@ -385,6 +402,8 @@ async function build(city) {
   const missing = kept.filter((b) => b.height === undefined).length;
   const out = {
     id: city.id,
+    section: city.section ?? 1,
+    area: city.area,
     attribution: attribution(ctx.sources),
     sources: ctx.sources,
     license: "ODbL-1.0 (https://opendatacommons.org/licenses/odbl/1-0/); derived from OpenStreetMap via Overture Maps by tools/osm/build.mjs",
@@ -394,6 +413,7 @@ async function build(city) {
       path: route.path.map(([x, z]) => [dm(x), dm(z)]),
       streets: route.streets,
       perch: flat(perch),
+      finish: flat(finish),
     },
     landmarks,
     // [height or -1 if unknown, min height, type, colour (0 none), landmark id or "", ring]
@@ -407,10 +427,10 @@ async function build(city) {
   };
   await mkdir(OUT, { recursive: true });
   const text = JSON.stringify(out);
-  await writeFile(join(OUT, `${city.id}.json`), text);
+  await writeFile(join(OUT, `${city.file}.json`), text);
   const routeLen = line.slice(1).reduce((s, p, i) => s + Math.hypot(p[0] - line[i][0], p[1] - line[i][1]), 0);
   console.log(
-    `${city.id}: ${kept.length} buildings (${missing} without heights, ${dropped} cleared from the route), ${roads.length} roads, ` +
+    `${city.file} (${city.area}): ${kept.length} buildings (${missing} without heights, ${dropped} cleared from the route), ${roads.length} roads, ` +
       `${areas.length} areas, ${lines.length} lines, route ${routeLen.toFixed(0)} m, ${(text.length / 1024).toFixed(0)} KB`,
   );
 }
@@ -452,12 +472,17 @@ if (args[0] === "--explore") {
   if (!city) throw new Error(`unknown city ${args[1]}`);
   await explore(city);
 } else {
+  // `nyc` builds every New York section, `nyc-2` just that one.
   for (const city of CITIES) {
-    if (args.length && !args.includes(city.id)) continue;
     if (!city.route) {
       console.warn(`${city.id}: no route yet`);
       continue;
     }
-    await build(city);
+    const { sections = [], ...main } = city;
+    const all = [{ ...main, file: city.id, section: 1 }, ...sections.map((s, i) => ({ ...main, ...s, file: `${city.id}-${i + 2}`, section: i + 2 }))];
+    for (const c of all) {
+      if (args.length && !args.includes(city.id) && !args.includes(c.file)) continue;
+      await build(c);
+    }
   }
 }

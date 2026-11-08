@@ -20,23 +20,29 @@ import { ArmsView, type BodyArm } from "../view/arms";
 import { CameraRig } from "../view/cameraRig";
 import { LEFT_COLOR, RIGHT_COLOR, figureSvg } from "../view/cueStyle";
 import { Particles, SpeedLines, WebLine } from "../view/fx";
-import { type Hud, type MenuItem } from "../view/hud";
+import { type Hud, type MenuItem, type Results } from "../view/hud";
+import type { IntroSound } from "../view/intro";
+import { demoHtml } from "../view/tutorial";
 import { WorldCues } from "../view/worldCues";
 import { Backdrop } from "../world/backdrop";
-import { CITIES, type CityId, type CityStyle, cityById } from "../world/cities";
+import { CITIES, type CityStyle, type Section, cityById, sectionOf } from "../world/cities";
 import { buildCity } from "../world/city";
 import { START } from "../world/cityLayout";
 import type { CollisionWorld } from "../world/collision";
 import { createWorldMaterial } from "../world/materials";
 import { pal } from "../world/palette";
 import type { PropLibrary } from "../world/props";
-import { type CityFile, buildRealCity } from "../world/realCity";
+import { type CityFile, type FinishRoof, buildRealCity } from "../world/realCity";
 import { Sky } from "../world/sky";
 import { Traffic } from "../world/traffic";
 import { HUB_ORDER, HUB_PITCH, Hub, armAim, armRaised, camDir } from "./hub";
 import type { Subject, SubjectState } from "./subject";
+import { type TargetSpec, Targets } from "./targets";
 
-/** hub: the rooftop city select. warp: zipping through a portal to the chosen city. */
+/**
+ * hub: the rooftop city select. warp: zipping through a portal to the chosen city.
+ * results: landed on the roof past the finish, with the score and what next.
+ */
 type State = "hub" | "warp" | "ready" | "play" | "paused" | "resuming" | "results";
 
 const HUB_SUN = new Vector3(-0.5, 0.85, 0.45).normalize();
@@ -77,12 +83,47 @@ const WARP_ZIP_AT = 0.18;
 const WARP_ZIP_FOR = 0.95;
 const WARP_WHITE_AT = 0.72;
 const WARP_ARRIVE_AT = 1.1;
+/** After the finish: the drop onto the roof past it, the turn to look back down the route, then the choices (seconds). */
+const FINALE_LAND_FOR = 1.0;
+const FINALE_TURN_AT = 0.3;
+const FINALE_TURN_FOR = 1.4;
+const FINALE_TARGETS_AT = 2.4;
+const FINALE_PITCH = 0.05;
+/** Taking a choice zips this share of the way to it before the white-out. */
+const CHOICE_ZIP = 0.55;
+/** A next section is only offered with a route at least this long (meters). */
+const MIN_ROUTE = 300;
 
-type Best = Partial<Record<CityId, number>>;
-type Course = { route: Route; judge: Judge; dressing: Dressing; cues: WorldCues; swingOfCue: Map<number, number> };
-/** What's on stage: the rooftop (Downtown) or a city from map data. */
+/** Best score per section (`Section.key`: "nyc", "nyc-2"…). */
+type Best = Partial<Record<string, number>>;
+type Course = {
+  route: Route; judge: Judge; dressing: Dressing; cues: WorldCues; swingOfCue: Map<number, number>; finishRoof: FinishRoof | null;
+};
+type Choice = "next" | "replay" | "city";
+/** The Little tool that takes each choice. */
+const CHOICE_TOOL: Record<Choice, string> = { next: "next_area", replay: "restart_run", city: "go_rooftop" };
+/** ?autoplay takes Next Area (else Replay) this long after the choices come up (seconds). */
+const AUTO_CHOOSE_AFTER = 2.5;
+/** The roof after a run: the landing, then the choices; `chosen` once one is shot. */
+type Finale = {
+  from: Vector3;
+  roof: FinishRoof | null;
+  yaw0: number;
+  yaw1: number;
+  choices: Choice[];
+  next: { section: Section; data: CityFile } | null;
+  shown: boolean;
+  chosen: number;
+  chosenAt: number;
+  side: Side;
+  zipFrom: Vector3;
+  white: boolean;
+};
+/** What's on stage: the rooftop (Downtown) or a city section from map data. */
 type Venue = {
-  id: "hub" | CityId;
+  /** "hub", or the section's key. */
+  id: string;
+  style: CityStyle | null;
   group: Group;
   world: CollisionWorld;
   chunks: Mesh[];
@@ -97,14 +138,26 @@ const num = (v: unknown) => {
   return Number.isFinite(n) ? Math.max(0, n) : 0;
 };
 
+/** A map file with a route the song can be laid along. */
+function playable(d: CityFile): boolean {
+  const p = d.route?.path;
+  if (!Array.isArray(p) || p.length < 2 || !Array.isArray(d.route.perch) || d.route.perch.length < 6) return false;
+  let len = 0;
+  for (let i = 1; i < p.length; i++) len += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]) / 10;
+  return len >= MIN_ROUTE;
+}
+
+/** The same direction as `a`, within half a turn of `from`. */
+const nearAngle = (a: number, from: number) => from + Math.atan2(Math.sin(a - from), Math.cos(a - from));
+
 type StepId = "frame" | "shootR" | "shootL" | "leanL" | "leanR";
 type Step = { id: StepId; label: string; hint: string; done: boolean };
 const STEPS: Record<StepId, Omit<Step, "done" | "id">> = {
-  frame: { label: "Find your spot", hint: "Back up until the box turns green. Your fists need room above your head." },
-  shootR: { label: `Shoot a web <b class="cr">RIGHT</b>`, hint: `Punch your right arm up and out to the <b class="cr">pink</b> dot. No need to lock your elbow.` },
-  shootL: { label: `Shoot a web <b class="cl">LEFT</b>`, hint: `Pull back, then punch your left arm out to the <b class="cl">blue</b> dot.` },
-  leanL: { label: `Lean <b class="co">LEFT</b>`, hint: "Shift your shoulders over to your left: that's how you dodge." },
-  leanR: { label: `Lean <b class="co">RIGHT</b>`, hint: "And over to your right." },
+  frame: { label: "Find your spot", hint: "Back up until the box turns green, with room above your head." },
+  shootR: { label: `Shoot a web <b class="cr">RIGHT</b>`, hint: `Punch your right arm up and out. In the city, punch as the <b class="cr">pink</b> ring closes.` },
+  shootL: { label: `Shoot a web <b class="cl">LEFT</b>`, hint: `Now your left arm. In the city, punch as the <b class="cl">blue</b> ring closes.` },
+  leanL: { label: `Lean <b class="co">LEFT</b>`, hint: "Shift your shoulders left to slip past a girder." },
+  leanR: { label: `Lean <b class="co">RIGHT</b>`, hint: "And over to the right." },
 };
 
 /** Free a venue's GPU buffers, leaving what it borrowed (the prop library, the shared world material). */
@@ -151,13 +204,21 @@ export class Game {
   private readonly borrowed: Set<object>;
   private readonly hub: Hub;
   private readonly hubVenue: Venue;
-  /** The one map city kept built (the last one visited). */
+  /** The one map city section kept built (the last one visited). */
   private cityVenue: Venue | null = null;
   private venue: Venue;
-  private readonly cityFiles = new Map<CityId, Promise<CityFile>>();
-  /** The chosen city, and its course once built (route… are its parts). */
+  private readonly sectionFiles = new Map<string, Promise<CityFile>>();
+  /** The chosen city and section, and its course once built (route… are its parts). */
   private city: CityStyle = cityById(HUB_ORDER[0])!;
+  private section: Section = sectionOf(this.city, 0);
+  /** The section "Next Area" goes to, with its map once it's loaded and its route checks out. */
+  private nextUp: { section: Section; data: CityFile | null } | null = null;
   private course: Course | null = null;
+  private readonly targets = new Targets();
+  private finale: Finale | null = null;
+  private landed = false;
+  /** While the intro plays over the rooftop: the rooftop takes no aim, and a punch or OK skips. */
+  private introSkip: ((now?: boolean) => void) | null = null;
   private route!: Route;
   private dressing!: Dressing;
   private cues!: WorldCues;
@@ -293,14 +354,17 @@ export class Game {
     const hubGroup = new Group();
     hubGroup.add(downtown.group, hubTraffic.group, this.hub.group);
     this.hubVenue = {
-      id: "hub", group: hubGroup, world: downtown.world, chunks, traffic: hubTraffic, backdrop: null, course: null, attribution: "",
+      id: "hub", style: null, group: hubGroup, world: downtown.world, chunks, traffic: hubTraffic, backdrop: null, course: null, attribution: "",
       dispose: () => undefined,
     };
     this.venue = this.hubVenue;
-    this.scene.add(hubGroup, this.sky.group, this.webLine.mesh, this.particles.mesh);
+    this.scene.add(hubGroup, this.sky.group, this.webLine.mesh, this.particles.mesh, this.targets.group);
     this.loadBest({});
-    const asked = cityById(new URLSearchParams(location.search).get("city") ?? "");
+    const params = new URLSearchParams(location.search);
+    const asked = cityById(params.get("city") ?? "");
     if (asked) this.city = asked;
+    // ?area=2 starts autoplay in the city's second section.
+    this.section = sectionOf(this.city, Math.max(0, Number(params.get("area") ?? 1) - 1) || 0);
 
     this.sun.castShadow = true;
     this.sun.shadow.camera.near = 1;
@@ -327,7 +391,7 @@ export class Game {
     this.wireMouse();
     this.toHub();
     this.renderer.compile(this.scene, this.camera);
-    if (this.autoplay) void this.travel(this.city);
+    if (this.autoplay) void this.travel(this.section);
   }
 
   // ------------------------------------------------------------------ platform
@@ -340,10 +404,16 @@ export class Game {
       if (!city) return { ok: false, detail: `There is no city "${String(args.city)}": pick one of ${HUB_ORDER.join(", ")}.` };
       // From the rooftop the hero shoots that portal, as the player would.
       if (this.state === "hub") this.shootPortal(this.hub.indexOf(city.id), this.shownSide);
-      else void this.travel(city);
+      else if (this.state === "results" && city === this.city && this.choose("replay")) return;
+      else void this.travel(sectionOf(city, 0));
+    });
+    L.tool("next_area", () => {
+      if (this.state !== "results") return { ok: false, detail: "Next Area is offered on the roof after a run." };
+      if (!this.choose("next")) return { ok: false, detail: `The next part of ${this.city.name} isn't ready to play.` };
     });
     L.tool("go_rooftop", () => {
       if (this.state === "hub" || this.state === "warp") return { ok: false, detail: "Already on the rooftop." };
+      if (this.state === "results" && this.choose("city")) return;
       this.goRooftop();
     });
     L.tool("pause_game", () => {
@@ -356,6 +426,7 @@ export class Game {
     });
     L.tool("restart_run", () => {
       if (!this.course || this.state === "hub" || this.state === "warp") return { ok: false, detail: "No run to restart: pick a city first." };
+      if (this.state === "results" && this.choose("replay")) return;
       this.startRun();
     });
     L.tool("quit_game", () => this.quit());
@@ -395,12 +466,14 @@ export class Game {
     c.addEventListener("click", (e) => {
       at(e);
       this.sfx.unlock();
-      if (this.state === "hub") this.hubShot(this.mouse.x < 0 ? -1 : 1);
+      if (this.introSkip) this.introSkip();
+      else if (this.state === "hub") this.hubShot(this.mouse.x < 0 ? -1 : 1);
+      else if (this.state === "results") this.finaleShot(this.mouse.x < 0 ? -1 : 1);
     });
   }
 
   // ------------------------------------------------------------------ cities
-  /** Best score per city, from the host's saved state and this browser's. */
+  /** Best score per section, from the host's saved state and this browser's. */
   private loadBest(state: unknown) {
     const s = (state ?? {}) as { best?: unknown };
     let local: unknown = null;
@@ -411,9 +484,14 @@ export class Game {
     }
     for (const src of [s.best, local]) {
       if (!src || typeof src !== "object") continue;
-      for (const c of CITIES) this.best[c.id] = Math.max(this.best[c.id] ?? 0, num((src as Best)[c.id]));
+      for (const c of CITIES) {
+        for (let i = 0; i < c.sections.length; i++) {
+          const k = sectionOf(c, i).key;
+          this.best[k] = Math.max(this.best[k] ?? 0, num((src as Best)[k]));
+        }
+      }
     }
-    this.hub?.setBest(this.best);
+    this.hub?.setBest(this.cityBests());
   }
 
   private saveBest() {
@@ -421,22 +499,46 @@ export class Game {
     this.little.saveState({ best: this.best });
   }
 
-  /** A city's map file, fetched once (the rooftop starts them all loading). */
-  private loadCity(id: CityId): Promise<CityFile> {
-    let p = this.cityFiles.get(id);
+  /** Each city's best over all its sections, for the portal labels. */
+  private cityBests(): Best {
+    return Object.fromEntries(CITIES.map((c) => [c.id, Math.max(0, ...c.sections.map((_, i) => this.best[sectionOf(c, i).key] ?? 0))]));
+  }
+
+  /** A section's map file, fetched once (the rooftop starts every city's first loading). */
+  private loadSection(sec: Section): Promise<CityFile> {
+    let p = this.sectionFiles.get(sec.key);
     if (!p) {
-      p = fetch(`${import.meta.env.BASE_URL}cities/${id}.json`).then((r) => {
-        if (!r.ok) throw new Error(`cities/${id}.json: HTTP ${r.status}`);
+      p = fetch(`${import.meta.env.BASE_URL}cities/${sec.key}.json`).then((r) => {
+        if (!r.ok) throw new Error(`cities/${sec.key}.json: HTTP ${r.status}`);
         return r.json() as Promise<CityFile>;
       });
-      p.catch(() => this.cityFiles.delete(id));
-      this.cityFiles.set(id, p);
+      p.catch(() => this.sectionFiles.delete(sec.key));
+      this.sectionFiles.set(sec.key, p);
     }
     return p;
   }
 
-  /** Build a city from its map file: streets, buildings, traffic, horizon, and the song's route through it. */
-  private buildCityVenue(style: CityStyle, data: CityFile): Venue {
+  /** Load the section after this one in the background; it's offered after the run once its route checks out. */
+  private prefetchNext() {
+    const next = sectionOf(this.city, this.section.index + 1);
+    if (next.key === this.section.key) {
+      this.nextUp = null;
+      return;
+    }
+    if (this.nextUp?.section.key === next.key) return;
+    const up = { section: next, data: null as CityFile | null };
+    this.nextUp = up;
+    this.loadSection(next).then(
+      (d) => {
+        if (this.nextUp === up && playable(d)) up.data = d;
+      },
+      (err) => console.warn(`[city] next area ${next.key} unavailable`, err),
+    );
+  }
+
+  /** Build a section from its map file: streets, buildings, traffic, horizon, and the song's route through it. */
+  private buildSectionVenue(sec: Section, data: CityFile): Venue {
+    const style = sec.city;
     const rc = buildRealCity(data, style, this.material, this.lib);
     const route = new Route(rc.world, buildChart(), rc.course);
     const course: Course = {
@@ -445,14 +547,15 @@ export class Game {
       dressing: new Dressing(this.lib, this.material, route),
       cues: new WorldCues(route),
       swingOfCue: new Map(route.swings.map((w, i) => [w.cue.id, i])),
+      finishRoof: rc.finishRoof,
     };
     const traffic = new Traffic(this.lib, this.material, rc.lanes, style.traffic, 0.24);
     const backdrop = new Backdrop(style, new Color(style.sky.horizon));
     const group = new Group();
     group.add(rc.group, traffic.group, backdrop.group, course.dressing.group, course.cues.group);
-    if (this.debug) console.info(`[city] ${style.id}`, rc.stats, JSON.stringify(route.describe()));
+    if (this.debug) console.info(`[city] ${sec.key}`, rc.stats, JSON.stringify(route.describe()));
     return {
-      id: style.id, group, world: rc.world, chunks: rc.chunks, traffic, backdrop, course, attribution: data.attribution,
+      id: sec.key, style, group, world: rc.world, chunks: rc.chunks, traffic, backdrop, course, attribution: data.attribution,
       dispose: () => disposeTree(group, this.borrowed),
     };
   }
@@ -464,7 +567,7 @@ export class Game {
       this.scene.add(v.group);
       this.venue = v;
     }
-    const style = v.id === "hub" ? null : cityById(v.id)!;
+    const style = v.style;
     const top = style ? new Color(style.sky.top) : pal("sky_top");
     const horizon = style ? new Color(style.sky.horizon) : pal("sky_horizon");
     this.sky.setColors(top, horizon);
@@ -480,18 +583,19 @@ export class Game {
     this.hud.setCredit(v.attribution || null);
   }
 
-  /** Into a city (built now if it isn't the one kept), ready to run. */
-  private enterCity(style: CityStyle, data: CityFile) {
-    if (this.cityVenue?.id !== style.id) {
+  /** Into a city section (built now if it isn't the one kept), ready to run. */
+  private enterSection(sec: Section, data: CityFile) {
+    if (this.cityVenue?.id !== sec.key) {
       const old = this.cityVenue;
       if (old) {
         if (this.venue === old) this.useVenue(this.hubVenue);
         old.dispose();
       }
-      this.cityVenue = this.buildCityVenue(style, data);
+      this.cityVenue = this.buildSectionVenue(sec, data);
     }
     const v = this.cityVenue!;
-    this.city = style;
+    this.city = sec.city;
+    this.section = sec;
     this.course = v.course;
     ({ route: this.route, judge: this.judge, dressing: this.dressing, cues: this.cues, swingOfCue: this.swingOfCue } = v.course!);
     this.useVenue(v);
@@ -502,21 +606,22 @@ export class Game {
     this.startRun();
   }
 
-  /** Straight to a city from a menu: white out, load, build, run. */
-  private async travel(style: CityStyle) {
+  /** Straight to a city section from a menu: white out, load, build, run. */
+  private async travel(sec: Section) {
     const token = ++this.travelToken;
     this.conductor.stop();
     this.hud.close();
+    this.endIntro();
     this.hud.fade(1, 300, "#ffffff");
     try {
-      const [data] = await Promise.all([this.loadCity(style.id), new Promise((r) => setTimeout(r, 320))]);
+      const [data] = await Promise.all([this.loadSection(sec), new Promise((r) => setTimeout(r, 320))]);
       if (token !== this.travelToken) return;
-      this.enterCity(style, data);
+      this.enterSection(sec, data);
     } catch (err) {
       console.error(err);
       if (token !== this.travelToken) return;
       this.toHub();
-      this.hud.callout(`COULDN'T LOAD ${style.name.toUpperCase()}`, "bad");
+      this.hud.callout(`COULDN'T LOAD ${sec.city.name.toUpperCase()}`, "bad");
     }
     this.hud.fade(0, 450);
   }
@@ -536,6 +641,40 @@ export class Game {
 
   private setTools(names: string[]) {
     this.little.setActiveTools(names);
+  }
+
+  // ------------------------------------------------------------------ intro
+  /**
+   * The intro plays over the rooftop: until it's done the rooftop waits, and a punch, OK or
+   * click calls `skip` (to its last shot); `skip(true)` drops it at once.
+   */
+  holdForIntro(skip: (now?: boolean) => void) {
+    this.introSkip = skip;
+    this.hud.setReticle(null);
+  }
+
+  /** The intro has handed over: the rooftop comes in. */
+  introDone() {
+    if (!this.introSkip) return;
+    this.introSkip = null;
+    if (this.state === "hub") {
+      this.trackedFor = 0;
+      this.showHubMenu();
+    }
+  }
+
+  /** The intro's sound cues (silent until audio is unlocked). */
+  introSound(kind: IntroSound) {
+    if (kind === "thwip") this.sfx.thwip();
+    else if (kind === "slam") this.sfx.bonk();
+    else this.sfx.whoosh();
+  }
+
+  /** Something started a run during the intro (the Little agent): cut it short. */
+  private endIntro() {
+    const skip = this.introSkip;
+    this.introSkip = null;
+    skip?.(true);
   }
 
   // ------------------------------------------------------------------ rooftop
@@ -564,10 +703,10 @@ export class Game {
     this.resetAim();
     this.aimArm = null;
     this.hubFocus = Math.max(0, this.hub.indexOf(this.city.id));
-    this.aimCam.copy(this.hubDirOf(this.hubFocus));
+    this.aimCam.copy(this.dirOf(this.hub.portals[this.hubFocus].center));
     this.showHubMenu();
     this.setTools(["start_run", "quit_game"]);
-    for (const id of HUB_ORDER) this.loadCity(id).catch(() => undefined);
+    for (const c of CITIES) this.loadSection(sectionOf(c, 0)).catch(() => undefined);
   }
 
   /**
@@ -575,9 +714,10 @@ export class Game {
    * arrows and OK and the Little agent drive them; the portal labels show the bests.
    */
   private showHubMenu() {
-    this.hub.setBest(this.best);
+    const bests = this.cityBests();
+    this.hub.setBest(bests);
     const items: MenuItem[] = this.hub.portals.map((p, i) => {
-      const best = this.best[p.city.id] ?? 0;
+      const best = bests[p.city.id] ?? 0;
       return {
         id: p.city.id,
         label: best > 0 ? `${p.city.name} (best ${best.toLocaleString("en-US")})` : p.city.name,
@@ -598,10 +738,10 @@ export class Game {
     rd.state = "perched";
   }
 
-  /** Camera-space direction to a portal from the rooftop view. */
-  private hubDirOf(i: number) {
+  /** Camera-space direction to a point in the world (a portal, a choice). */
+  private dirOf(p: Vector3) {
     this.camera.updateMatrixWorld();
-    return this.camera.worldToLocal(this.tmp.copy(this.hub.portals[i].center)).normalize();
+    return this.camera.worldToLocal(this.tmp.copy(p)).normalize();
   }
 
   private focusPortal(i: number) {
@@ -611,10 +751,11 @@ export class Game {
   }
 
   /**
-   * Aim from, in order: an arm the player holds up, the remote's last pick (for a moment),
-   * the mouse (desk testing), else the remote's pick.
+   * The reticle for a menu standing in the world (the rooftop portals, the choices after a
+   * run). Aim from, in order: an arm the player holds up, the remote's last pick (for a
+   * moment), the mouse (desk testing), else the remote's pick (`focusAt`).
    */
-  private updateHub(dt: number, now: number) {
+  private aimReticle(dt: number, now: number, focusAt: Vector3, pick: (eye: Vector3, dir: Vector3) => number) {
     const m = this.motion;
     const live = m.tracking;
     const raised = ([0, 1] as const).filter((k) => live && armRaised(m.arms[k]));
@@ -635,20 +776,33 @@ export class Game {
       source = "mouse";
       this.shownSide = this.mouse.x < 0 ? -1 : 1;
     } else {
-      goal = this.tmp2.copy(this.hubDirOf(this.hubFocus));
+      goal = this.tmp2.copy(this.dirOf(focusAt));
       source = "menu";
     }
     this.aimCam.lerp(goal, 1 - Math.exp(-(source === "arm" ? 14 : 20) * dt)).normalize();
     const aimWorld = this.tmp3.copy(this.aimCam).applyQuaternion(this.camera.quaternion);
-    const hovered = this.hub.pick(this.camera.position, aimWorld);
+    const hovered = pick(this.camera.position, aimWorld);
     if (hovered !== this.hovered && hovered >= 0) this.sfx.ui("move");
     this.hovered = hovered;
     this.trackedFor = live ? this.trackedFor + dt : 0;
     if (source === "arm" && hovered >= 0) this.armHover = { i: hovered, at: now };
+    this.arms.setHub(this.shownSide, this.aimCam);
+    return { source, hovered, aimWorld, live };
+  }
+
+  private updateHub(dt: number, now: number) {
+    const m = this.motion;
+    if (this.introSkip) {
+      // The intro is on top: a punch skips it, nothing aims.
+      if (m.drain().some((e) => e.type === "shoot")) this.introSkip();
+      this.hub.update(dt, -1);
+      this.hud.setReticle(null);
+      return;
+    }
+    const { source, hovered, aimWorld, live } = this.aimReticle(dt, now, this.hub.portals[this.hubFocus].center, (e, d) => this.hub.pick(e, d));
     if (source !== "menu" && hovered >= 0 && hovered !== this.hubFocus) this.focusPortal(hovered);
     this.hub.update(dt, hovered);
-    this.arms.setHub(this.shownSide, this.aimCam);
-    this.showReticle(aimWorld, hovered);
+    this.showReticle(aimWorld, hovered >= 0 ? this.hub.portals[hovered].city.color : null);
 
     for (const e of m.drain()) if (e.type === "shoot") this.hubShot(e.side, true);
     if (this.hubWeb && now > this.hubWeb.until) this.hubWeb = null;
@@ -665,23 +819,22 @@ export class Game {
     if (m.available) this.hud.pip.draw(m, NO_FOCUS, now);
   }
 
-  /** The reticle on screen, where the aim meets the portal wall. */
-  private showReticle(aimWorld: Vector3, hovered: number) {
+  /** The reticle on screen, where the aim meets the portal wall; `lock` colors it over a target. */
+  private showReticle(aimWorld: Vector3, lock: string | null) {
     const p = this.tmp.copy(this.camera.position).addScaledVector(aimWorld, 40).project(this.camera);
     if (p.z > 1) {
       this.hud.setReticle(null);
       return;
     }
-    this.hud.setReticle({ x: (p.x + 1) * 960, y: (1 - p.y) * 540 }, hovered >= 0 ? this.hub.portals[hovered].city.color : null);
+    this.hud.setReticle({ x: (p.x + 1) * 960, y: (1 - p.y) * 540 }, lock);
   }
 
   /**
-   * A web from the rooftop. With a body shot the arm's own direction decides; otherwise
-   * the reticle does. On a portal it's the trip there; on nothing it just flies.
+   * A web at a menu in the world. With a body shot the arm's own direction decides;
+   * otherwise the reticle does. On a target `take` runs; on nothing the web just flies.
    */
-  private hubShot(side: Side, body = false) {
-    if (this.state !== "hub") return;
-    // Someone just stepping in, or passing by, mustn't pick a city by accident.
+  private worldShot(side: Side, body: boolean, pick: (eye: Vector3, dir: Vector3) => number, take: (i: number, side: Side) => void) {
+    // Someone just stepping in, or passing by, mustn't pick anything by accident.
     if (body && this.trackedFor < HUB_SETTLE) return;
     this.armsShown.add(side);
     let dir = this.tmp3.copy(this.aimCam);
@@ -693,11 +846,11 @@ export class Game {
     }
     this.shownSide = side;
     const world = dir.applyQuaternion(this.camera.quaternion);
-    let i = this.hub.pick(this.camera.position, world);
-    // A body shot only takes a portal the reticle was already resting on.
+    let i = pick(this.camera.position, world);
+    // A body shot only takes a target the reticle was already resting on.
     if (body && !(i >= 0 && this.armHover.i === i && performance.now() - this.armHover.at < AIMED_WITHIN * 1000)) i = -1;
     if (i >= 0) {
-      this.shootPortal(i, side);
+      take(i, side);
       return;
     }
     this.sfx.thwip();
@@ -707,9 +860,16 @@ export class Game {
     this.hubWeb = { to: this.camera.position.clone().addScaledVector(world, 60), until: performance.now() + 260 };
   }
 
+  /** A web from the rooftop: on a portal it's the trip there. */
+  private hubShot(side: Side, body = false) {
+    if (this.state !== "hub" || this.introSkip) return;
+    this.worldShot(side, body, (e, d) => this.hub.pick(e, d), (i, s) => this.shootPortal(i, s));
+  }
+
   /** Shoot the portal and go: the web, the zip toward it, a white-out, then the city. */
   private shootPortal(i: number, side: Side) {
     if (this.state !== "hub" || i < 0) return;
+    this.endIntro();
     const p = this.hub.portals[i];
     this.sfx.unlock();
     this.sfx.thwip();
@@ -718,7 +878,7 @@ export class Game {
     this.arms.flick(side);
     this.shownSide = side;
     this.focusPortal(i);
-    this.aimCam.copy(this.hubDirOf(i));
+    this.aimCam.copy(this.dirOf(p.center));
     this.arms.setHub(side, this.aimCam);
     this.city = p.city;
     this.hud.close();
@@ -732,7 +892,7 @@ export class Game {
     this.setTools([]);
     const warp = { portal: i, side, from: this.rider.pos.clone(), data: null as CityFile | null, failed: false, white: false };
     this.warp = warp;
-    this.loadCity(p.city.id).then(
+    this.loadSection(sectionOf(p.city, 0)).then(
       (d) => (warp.data = d),
       (err) => {
         console.error(err);
@@ -756,7 +916,7 @@ export class Game {
     rd.speed = rd.vel.length();
     rd.heading.set(to.x, 0, to.z).normalize();
     this.rig.perchPitch = Math.atan2(to.y, Math.hypot(to.x, to.z));
-    this.arms.setHub(w.side, this.hubDirOf(w.portal));
+    this.arms.setHub(w.side, this.dirOf(p.center));
     if (t > WARP_WHITE_AT && !w.white) {
       w.white = true;
       this.hud.fade(1, 320, "#ffffff");
@@ -772,7 +932,7 @@ export class Game {
       this.warp = null;
       this.hubWeb = null;
       this.webLine.hide();
-      this.enterCity(p.city, w.data);
+      this.enterSection(sectionOf(p.city, 0), w.data);
       this.hud.fade(0, 500);
     }
   }
@@ -781,6 +941,8 @@ export class Game {
   private resetRun() {
     this.webLine.hide();
     this.setPip(false);
+    this.finale = null;
+    this.targets.hide();
     if (!this.course) return;
     this.judge.reset();
     this.dressing.reset();
@@ -845,6 +1007,7 @@ export class Game {
     }
     this.steps = ids.map((id) => ({ id, ...STEPS[id], done: false }));
     this.setTools(["start_run", "go_rooftop", "quit_game"]);
+    this.prefetchNext();
     if (this.autoplay) {
       this.beginPlay();
       return;
@@ -876,15 +1039,15 @@ export class Game {
     }
     const cur = this.steps[this.readyStep];
     const all = this.readyStep >= this.steps.length;
-    const now = all
-      ? `<div class="step-now done"><i class="step-fig">${figureSvg("frame")}</i><div><b>You're ready!</b><p>Here comes the song.</p></div></div>`
-      : `<div class="step-now"><i class="step-fig">${figureSvg(cur.id)}</i><div><b>${cur.label}</b><p>${cur.hint}</p></div></div>`;
-    const list = this.steps
-      .map((s, i) => `<li class="${s.done ? "done" : i === this.readyStep ? "cur" : ""}">${s.label}</li>`)
-      .join("");
+    const text = all ? `<b>You're ready!</b><p>Here comes the song.</p>` : `<b>${cur.label}</b><p>${cur.hint}</p>`;
+    const chips = this.steps.length > 1
+      ? `<ol class="steps">${this.steps
+        .map((s, i) => `<li class="${s.done ? "done" : i === this.readyStep ? "cur" : ""}">${figureSvg(s.id)}</li>`)
+        .join("")}</ol>`
+      : "";
     this.hud.showGuide({
-      title: `${this.city.name.toUpperCase()} · ${this.city.area.toUpperCase()}`,
-      side: `${now}<ol class="steps">${list}</ol>`,
+      title: `${this.city.name.toUpperCase()} · ${this.section.area.toUpperCase()}`,
+      side: `${demoHtml(all ? "ready" : cur.id)}<div class="step-text${all ? " done" : ""}">${text}</div>${chips}`,
       footer: `<kbd>OK</kbd> or punch both arms: ${this.steps.length > 1 ? "skip the tutorial" : "start"} &nbsp; <kbd>BACK</kbd> rooftop`,
       data: { steps: this.steps.map((s) => ({ step: s.label.replace(/<[^>]+>/g, ""), done: s.done })) },
     });
@@ -988,7 +1151,7 @@ export class Game {
     this.resetAim();
     this.conductor.start(-0.3);
     this.setTools(["pause_game", "restart_run", "quit_game"]);
-    this.little.emit("run_started", { city: this.city.id, input: this.mode, cues: this.judge.rts.length });
+    this.little.emit("run_started", { city: this.city.id, area: this.section.area, input: this.mode, cues: this.judge.rts.length });
   }
 
   /** Only camera punches lag: keys and autoplay are judged as they come. */
@@ -1117,47 +1280,232 @@ export class Game {
     this.hud.mirror.setStream(null);
   }
 
+  /**
+   * The song is over: the hero drops onto the roof past the finish and turns to look back
+   * down the route, the score comes up, then the choices hang in the sky to be shot.
+   */
   private endRun() {
     this.state = "results";
+    this.stateT = 0;
     this.sfx.setWind(0);
+    this.releaseWeb();
     const j = this.judge;
     const acc = j.accuracy;
     const grade = acc >= 0.95 ? "S" : acc >= 0.85 ? "A" : acc >= 0.7 ? "B" : acc >= 0.55 ? "C" : "D";
     const stars = acc >= 0.85 ? 3 : acc >= 0.65 ? 2 : 1;
     const final = j.score;
-    const city = this.city;
-    const newBest = final > (this.best[city.id] ?? 0);
+    const city = this.city, key = this.section.key;
+    const newBest = final > (this.best[key] ?? 0);
     if (newBest) {
-      this.best[city.id] = final;
+      this.best[key] = final;
       this.saveBest();
     }
     this.hud.showRunHud(false);
     this.setPip(false);
     this.hud.setHint(null);
     this.hud.setPrompt(null);
-    // The camera keeps watching: both arms at once is OK on the results menu.
-    this.menuGestureAfter = performance.now() + 1500;
+    this.hud.setCenter(null);
+
+    const roof = this.course?.finishRoof ?? null;
+    const h = this.rider.heading;
+    const yaw0 = Math.atan2(-h.x, -h.z);
+    const back = roof ? Math.atan2(-roof.fx, -roof.fz) : yaw0;
+    const next = this.nextUp?.data ? { section: this.nextUp.section, data: this.nextUp.data } : null;
+    const choices: Choice[] = next ? ["next", "replay", "city"] : ["replay", "city"];
+    this.finale = {
+      from: this.rider.pos.clone(), roof, yaw0, yaw1: nearAngle(back, yaw0), choices, next,
+      shown: false, chosen: -1, chosenAt: 0, side: this.shownSide, zipFrom: new Vector3(), white: false,
+    };
+    this.aimArm = null;
+    this.armHover = { i: -1, at: -1e9 };
+    this.menuAimUntil = 0;
+    this.landed = false;
+
     const n = (v: number) => v.toLocaleString("en-US");
     const rows: Array<[string, string]> = [
       ["Accuracy", `${(acc * 100).toFixed(1)}%`],
       ["Max combo", n(j.maxCombo)],
-      ["Perfect · Great · Good", `${j.counts.perfect} · ${j.counts.great} · ${j.counts.good}`],
+      ["Perfect", n(j.counts.perfect)],
+      ["Great", n(j.counts.great)],
+      ["Good", n(j.counts.good)],
       ["Missed", n(j.counts.miss)],
       ["Dodge coins", n(this.coins)],
     ];
-    const items: MenuItem[] = [
-      { id: "again", label: "Play again", action: "restart_run", onSelect: () => this.startRun() },
-      { id: "rooftop", label: "Rooftop", action: "go_rooftop", onSelect: () => this.goRooftop() },
-    ];
-    this.hud.showResults(
-      { heading: `${city.name.toUpperCase()} COMPLETE`, score: final, best: this.best[city.id] ?? final, newBest, stars, grade, rows },
-      items,
-    );
-    this.setTools(["start_run", "restart_run", "go_rooftop", "quit_game"]);
-    this.little.emit("run_finished", {
-      city: city.id, score: final, grade, stars, accuracy: Math.round(acc * 1000) / 10, maxCombo: j.maxCombo, ...j.counts,
-      input: this.mode,
+    const results: Results = {
+      heading: `${city.name.toUpperCase()} · ${this.section.area.toUpperCase()}`,
+      score: final, best: this.best[key] ?? final, newBest, stars, grade, rows,
+    };
+    const items: MenuItem[] = choices.map((c, i) => {
+      const spec = this.choiceSpec(c);
+      return { id: c, label: `${spec.label}: ${spec.sub}`, action: CHOICE_TOOL[c], onSelect: () => this.takeChoice(i, this.shownSide) };
     });
+    this.hud.showFinale(results, items, 0);
+    this.setTools([...(next ? ["next_area"] : []), "start_run", "restart_run", "go_rooftop", "quit_game"]);
+    this.little.emit("run_finished", {
+      city: city.id, area: this.section.area, score: final, grade, stars, accuracy: Math.round(acc * 1000) / 10, maxCombo: j.maxCombo,
+      ...j.counts, input: this.mode, nextArea: next?.section.area ?? null,
+    });
+  }
+
+  /** What a choice after a run looks like: its name and where it goes. */
+  private choiceSpec(c: Choice): TargetSpec {
+    if (c === "next") {
+      const area = this.finale?.next?.section.area ?? "";
+      return { id: c, label: "Next area", sub: area, color: this.city.color, icon: "next" };
+    }
+    if (c === "replay") return { id: c, label: "Replay", sub: this.section.area, color: "#4fd1a5", icon: "replay" };
+    return { id: c, label: "Choose city", sub: "Back to the rooftop", color: "#8f67ee", icon: "city" };
+  }
+
+  /** Take a choice by name (the Little agent's tools); false if it isn't on offer. */
+  private choose(c: Choice): boolean {
+    const i = this.finale?.choices.indexOf(c) ?? -1;
+    if (i < 0) return false;
+    this.takeChoice(i, this.shownSide);
+    return true;
+  }
+
+  private showTargets() {
+    const f = this.finale!;
+    f.shown = true;
+    this.camera.updateMatrixWorld();
+    this.targets.show(f.choices.map((c) => this.choiceSpec(c)), this.camera.position, f.yaw1, FINALE_PITCH);
+    this.hud.menu.setFocus(0);
+    this.aimCam.copy(this.dirOf(this.targets.items[0].center));
+    this.sfx.ui("move");
+  }
+
+  private updateFinale(dt: number, now: number) {
+    const f = this.finale;
+    if (!f) return;
+    if (f.chosen >= 0) {
+      this.updateChoiceZip(dt);
+      return;
+    }
+    const t = this.stateT;
+    const rd = this.rider;
+    this.prevPos.copy(rd.pos);
+    if (f.roof) {
+      const u = clamp(t / FINALE_LAND_FOR, 0, 1);
+      const e = 1 - (1 - u) ** 3;
+      rd.pos.lerpVectors(f.from, this.tmp.set(f.roof.x, f.roof.y + 0.9, f.roof.z), e);
+      rd.pos.y += Math.sin(u * Math.PI) * 1.6;
+      rd.state = u < 1 ? "air" : "perched";
+      if (u >= 1 && !this.landed) {
+        this.landed = true;
+        this.rig.addTrauma(0.25);
+        this.sfx.bonk();
+      }
+    } else rd.state = "perched";
+    if (dt > 0) rd.vel.subVectors(rd.pos, this.prevPos).divideScalar(dt);
+    rd.speed = rd.state === "perched" ? 0 : rd.vel.length();
+    const k = clamp((t - FINALE_TURN_AT) / FINALE_TURN_FOR, 0, 1);
+    const yaw = f.yaw0 + (f.yaw1 - f.yaw0) * k * k * (3 - 2 * k);
+    rd.heading.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+    rd.steer = 0;
+    this.rig.perchPitch = FINALE_PITCH;
+    this.lean = 0;
+
+    if (!f.shown && t >= FINALE_TARGETS_AT) this.showTargets();
+    const events = this.motion.drain();
+    if (!f.shown) {
+      this.targets.update(dt, -1);
+      return;
+    }
+    if (this.autoplay && t > FINALE_TARGETS_AT + AUTO_CHOOSE_AFTER) {
+      this.takeChoice(0, 1);
+      return;
+    }
+    const focus = this.targets.items[this.finaleFocus()]?.center ?? this.targets.items[0].center;
+    const { source, hovered, aimWorld, live } = this.aimReticle(dt, now, focus, (e, d) => this.targets.pick(e, d));
+    if (source !== "menu" && hovered >= 0) this.hud.menu.setFocus(hovered);
+    this.targets.update(dt, hovered);
+    this.showReticle(aimWorld, hovered >= 0 ? this.targets.items[hovered].spec.color : null);
+    for (const e of events) if (e.type === "shoot") this.finaleShot(e.side, true);
+    if (this.hubWeb && now > this.hubWeb.until) this.hubWeb = null;
+    if (!this.hubWeb) this.webLine.hide();
+
+    let prompt: string;
+    const name = hovered >= 0 ? this.targets.items[hovered].spec.label.toUpperCase() : "";
+    if (source === "arm") prompt = hovered >= 0 ? `Punch to shoot a web at <b>${name}</b>!` : "Aim at a target";
+    else if (live) prompt = "Raise an arm to aim, then punch to choose";
+    else if (this.motion.available) prompt = "Step in front of the camera, then raise an arm to aim";
+    else prompt = `Pick with <b>◀ ▶</b> and press <b>OK</b>`;
+    this.hud.setFinalePrompt(prompt);
+  }
+
+  /** The remote's pick (the menu's focus), for the reticle to rest on. */
+  private finaleFocus() {
+    return Math.max(0, this.hud.menu.focused);
+  }
+
+  /** A web after a run: on a choice it's taken. */
+  private finaleShot(side: Side, body = false) {
+    const f = this.finale;
+    if (this.state !== "results" || !f || !f.shown || f.chosen >= 0 || !this.targets.ready) return;
+    this.worldShot(side, body, (e, d) => this.targets.pick(e, d), (i, s) => this.takeChoice(i, s));
+  }
+
+  /** Shoot a choice and go: the web, a zip toward it, a white-out, then wherever it leads. */
+  private takeChoice(i: number, side: Side) {
+    const f = this.finale;
+    if (this.state !== "results" || !f || f.chosen >= 0 || i < 0 || i >= f.choices.length) return;
+    if (!f.shown) this.showTargets();
+    const tg = this.targets.items[i];
+    this.sfx.unlock();
+    this.sfx.thwip();
+    this.sfx.attach();
+    this.arms.puff(side);
+    this.arms.flick(side);
+    this.shownSide = side;
+    this.aimCam.copy(this.dirOf(tg.center));
+    this.arms.setHub(side, this.aimCam);
+    this.hud.close();
+    this.hud.setReticle(null);
+    this.hud.showPip(false);
+    this.hubWeb = { to: tg.center.clone(), until: Infinity };
+    this.webLine.shoot();
+    this.rig.addKick(0.8);
+    f.chosen = i;
+    f.chosenAt = this.stateT;
+    f.side = side;
+    f.zipFrom.copy(this.rider.pos);
+    this.setTools([]);
+  }
+
+  private updateChoiceZip(dt: number) {
+    const f = this.finale!;
+    const tg = this.targets.items[f.chosen];
+    const t = this.stateT - f.chosenAt;
+    this.targets.update(dt, -1, f.chosen);
+    const u = clamp((t - WARP_ZIP_AT) / WARP_ZIP_FOR, 0, 1);
+    const to = this.tmp.subVectors(tg.center, f.zipFrom);
+    const rd = this.rider;
+    this.prevPos.copy(rd.pos);
+    rd.pos.copy(f.zipFrom).addScaledVector(to, CHOICE_ZIP * u * u * u);
+    if (dt > 0) rd.vel.subVectors(rd.pos, this.prevPos).divideScalar(dt);
+    rd.speed = rd.vel.length();
+    rd.state = "perched";
+    rd.heading.set(to.x, 0, to.z).normalize();
+    this.rig.perchPitch = Math.atan2(to.y, Math.hypot(to.x, to.z));
+    this.arms.setHub(f.side, this.dirOf(tg.center));
+    if (t > WARP_WHITE_AT && !f.white) {
+      f.white = true;
+      this.hud.fade(1, 320, "#ffffff");
+      this.sfx.whoosh();
+    }
+    if (t < WARP_ARRIVE_AT) return;
+    const choice = f.choices[f.chosen];
+    const next = f.next;
+    this.finale = null;
+    this.targets.hide();
+    this.hubWeb = null;
+    this.webLine.hide();
+    this.arms.setHub(null);
+    if (choice === "next" && next) this.enterSection(next.section, next.data);
+    else if (choice === "city") this.toHub();
+    else this.startRun();
+    this.hud.fade(0, 500);
   }
 
   // ------------------------------------------------------------------ input
@@ -1166,6 +1514,10 @@ export class Game {
     for (const ev of this.input.drain()) {
       if (ev.type !== "down") continue;
       this.sfx.unlock();
+      if (this.introSkip) {
+        if (ev.action === "select" || ev.action === "back") this.introSkip();
+        continue;
+      }
       if (this.hud.menuOpen) {
         this.menuInput(ev.action);
         continue;
@@ -1179,16 +1531,16 @@ export class Game {
         this.showPauseMenu();
       }
     }
-    if (this.state === "hub") {
+    if (this.state === "hub" || this.state === "results") {
       // Desk testing: Q / E shoot the left / right arm at whatever the reticle is on.
-      for (const p of presses) if (p.kind === "hand") this.hubShot(p.side);
+      for (const p of presses) if (p.kind === "hand") (this.state === "hub" ? this.hubShot(p.side) : this.finaleShot(p.side));
       return;
     }
     if (this.state !== "play") {
-      // Between runs the only gesture is both arms at once, as OK on a menu (the ready screen reads its own).
+      // On the pause menu the gesture is both arms at once, as OK (the ready screen reads its own).
       if (this.state !== "ready") {
         const ok = this.motion.drain().some((e) => this.bothArms(e));
-        const menu = this.hud.menuOpen && (this.state === "results" || this.state === "paused");
+        const menu = this.hud.menuOpen && this.state === "paused";
         if (ok && menu && performance.now() > this.menuGestureAfter) {
           this.sfx.ui("select");
           this.hud.menu.activate();
@@ -1217,6 +1569,9 @@ export class Game {
         // The remote moves the reticle to the next portal over.
         this.hubFocus = (this.hubFocus + step + this.hub.portals.length) % this.hub.portals.length;
         this.menuAimUntil = performance.now() / 1000 + MENU_AIM_HOLD;
+      } else if (this.state === "results") {
+        // …and to the next choice over, once they're up.
+        this.menuAimUntil = performance.now() / 1000 + MENU_AIM_HOLD;
       }
     } else if (a === "select") {
       this.sfx.ui("select");
@@ -1224,7 +1579,7 @@ export class Game {
     } else if (a === "back") {
       this.sfx.ui("back");
       if (this.state === "paused") this.resume();
-      else if (this.state === "results") this.goRooftop();
+      else if (this.state === "results") this.choose("city") || this.goRooftop();
       else if (this.state === "hub") this.quit();
     }
   }
@@ -1394,7 +1749,7 @@ export class Game {
     else if (this.state === "resuming") this.updateResuming();
     else if (this.state === "paused") this.updatePaused(dt);
     if (this.state === "play") this.updatePlay(dt, now);
-    else if (this.state === "results") this.updateRide(dt, this.conductor.beat(now));
+    else if (this.state === "results") this.updateFinale(dt, now);
     else if (this.state === "ready") this.placeRider(0, dt);
 
     const frozen = this.state === "paused" || this.state === "resuming";
@@ -1411,7 +1766,7 @@ export class Game {
     this.updateChunkVisibility();
     this.driveArmsFromBody();
     this.arms.update(frozen ? dt : simDt, this.rider, this.camera, this.sunDir);
-    const zipping = this.state === "warp";
+    const zipping = this.state === "warp" || (this.finale?.chosen ?? -1) >= 0;
     this.speedLines.update(simDt, this.rider.state === "perched" && !zipping ? 0 : this.rider.speed * 1.6);
     const webTo = this.web ? this.rider.anchor : this.hubWeb?.to;
     if (webTo) this.webLine.update(dt, this.arms.webOrigin(this.camera, this.tmp), webTo, this.camera);
@@ -1528,7 +1883,7 @@ export class Game {
 
     if (beat > FIRST_CUE_BEAT + 8) this.hud.setHint(null);
     // The street the hero is over, by its real name.
-    const where = this.r <= LEAP_BEAT ? this.city.area : this.route.streetAt(this.r);
+    const where = this.r <= LEAP_BEAT ? this.section.area : this.route.streetAt(this.r);
     this.hud.setProgress((beat - FIRST_CUE_BEAT) / (FINISH_BEAT - FIRST_CUE_BEAT), where);
     this.hud.setStats(this.judge.score, this.judge.combo, this.judge.multiplier, this.judge.accuracy);
     this.sfx.setWind(clamp((this.rider.speed - 12) / 18, 0, 1) * 0.6);

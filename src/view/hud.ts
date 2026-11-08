@@ -1,8 +1,11 @@
 // DOM HUD + menus on the 1920×1080 canvas. Big type, high contrast, chunky shapes,
 // and data-little-* annotations so the Little agent can read and drive it.
 
+import { gsap } from "gsap";
+
 import { BodyGuide } from "./bodyGuide";
 import { logoSvg } from "./logo";
+import { playDemo } from "./tutorial";
 
 export type MenuItem = {
   id: string;
@@ -17,7 +20,6 @@ export type Results = {
   heading: string;
   score: number; best: number; newBest: boolean; stars: number; grade: string;
   rows: Array<[string, string]>;
-  note?: string;
 };
 export type GuidePanel = {
   title: string;
@@ -76,6 +78,10 @@ class Menu {
     });
   }
 
+  get focused() {
+    return this.focus;
+  }
+
   move(d: number) {
     if (this.buttons.length) this.setFocus(this.focus + d);
   }
@@ -113,6 +119,9 @@ export class Hud {
   private readonly credit: HTMLElement;
   private lastStats = "";
   private lastProgress = "";
+  private finaleAnim: gsap.core.Timeline | null = null;
+  /** The setup step's looping demo. */
+  private demo: gsap.core.Timeline | null = null;
 
   constructor(parent: HTMLElement) {
     this.root = el("div", "hud");
@@ -266,10 +275,12 @@ export class Hud {
   // ---------------------------------------------------------------- body guide panel
   /** The big camera mirror with coaching beside it: setup, and finding the player again. */
   showGuide(p: GuidePanel) {
+    this.demo?.kill();
     this.ready.innerHTML = `<div class="ready-card"><h2>${p.title}</h2><div class="ready-body"><div class="ready-mirror"></div><div class="ready-side">${p.side}</div></div><div class="ready-foot">${p.footer}</div></div>`;
     this.ready.dataset.littleData = JSON.stringify(p.data ?? {});
     this.ready.querySelector(".ready-mirror")!.append(this.mirror.root);
     this.ready.classList.remove("hidden");
+    this.demo = playDemo(this.ready.querySelector(".step-demo"));
   }
 
   get guideOpen() {
@@ -278,6 +289,8 @@ export class Hud {
 
   hideGuide() {
     this.ready.classList.add("hidden");
+    this.demo?.kill();
+    this.demo = null;
   }
 
   // ---------------------------------------------------------------- menus
@@ -289,10 +302,14 @@ export class Hud {
     this.menu.set(items, focus);
     (this.overlay.querySelector(".menu-slot") ?? this.overlay).append(this.menu.root);
     this.root.classList.toggle("on-hub", mode === "hub-mode");
+    this.finaleAnim?.kill();
+    this.finaleAnim = null;
     this.menuOpen = true;
   }
 
   close() {
+    this.finaleAnim?.kill();
+    this.finaleAnim = null;
     this.overlay.classList.add("hidden");
     this.root.classList.remove("on-hub");
     this.menuOpen = false;
@@ -327,27 +344,63 @@ export class Hud {
     );
   }
 
-  showResults(r: Results, items: MenuItem[]) {
-    const stars = [1, 2, 3].map((i) => `<span class="star ${i <= r.stars ? "on" : ""}" style="animation-delay:${0.25 + i * 0.18}s">★</span>`).join("");
+  /**
+   * On the roof after a run: the score card counts up in the middle, then drops to the
+   * bottom so the choices in the sky (drawn by the game) have the view. The choice
+   * buttons stay in the page, unseen, for the remote and the Little agent.
+   */
+  showFinale(r: Results, items: MenuItem[], focus: number) {
+    const stars = [1, 2, 3].map((i) => `<span class="star ${i <= r.stars ? "on" : ""}">★</span>`).join("");
     const rows = r.rows.map(([k, v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`).join("");
     this.open(
-      `<div class="panel results">
-        <h2>${r.heading}</h2>
-        <div class="result-head">
-          <div class="grade" data-little="readout" data-little-label="Grade" data-little-data='{"value":"${r.grade}"}'>${r.grade}</div>
-          <div>
-            <div class="stars" data-little="readout" data-little-label="Stars" data-little-data='{"value":${r.stars}}'>${stars}</div>
-            <div class="final" data-little="readout" data-little-label="Final score" data-little-data='{"value":${r.score}}'>${r.score.toLocaleString("en-US")}</div>
-          </div>
+      `<div class="finale">
+        <div class="finale-head">
+          <div class="finale-where">${r.heading}</div>
+          <div class="finale-title">AREA CLEARED!</div>
+          <div class="finale-prompt" data-little="readout" data-little-label="Finish prompt"></div>
         </div>
-        ${r.newBest ? `<div class="newbest">NEW BEST!</div>` : `<div class="bestline">BEST ${r.best.toLocaleString("en-US")}</div>`}
-        <div class="rows">${rows}</div>
-        ${r.note ? `<div class="note" data-little="readout" data-little-label="Note">${r.note}</div>` : ""}
-        <div class="menu-slot"></div>
-        ${MENU_HINT}
+        <div class="finale-card">
+          <div class="grade" data-little="readout" data-little-label="Grade" data-little-data='{"value":"${r.grade}"}'>${r.grade}</div>
+          <div class="fc-main">
+            <div class="final" data-little="readout" data-little-label="Final score" data-little-data='{"value":${r.score}}'>0</div>
+            <div class="fc-sub">
+              <div class="stars" data-little="readout" data-little-label="Stars" data-little-data='{"value":${r.stars}}'>${stars}</div>
+              ${r.newBest ? `<div class="newbest">NEW BEST!</div>` : `<div class="bestline">BEST ${r.best.toLocaleString("en-US")}</div>`}
+            </div>
+          </div>
+          <div class="rows">${rows}</div>
+        </div>
+        <div class="menu-slot finale-choices"></div>
       </div>`,
-      "Results",
+      "Run finished",
       items,
+      focus,
+      "finale-mode",
     );
+    const q = <T extends Element = HTMLElement>(s: string) => this.overlay.querySelector(s) as T;
+    const card = q(".finale-card"), final = q(".final");
+    const count = { v: 0 };
+    const tl = gsap.timeline();
+    tl.set(card, { y: -330, scale: 1.22, autoAlpha: 0 })
+      .set([q(".rows"), q(".finale-head")], { autoAlpha: 0 })
+      .set(q(".grade"), { autoAlpha: 0 })
+      .to(card, { autoAlpha: 1, duration: 0.35, ease: "back.out(1.6)" }, 0.3)
+      .from(card, { scale: 0.7, duration: 0.45, ease: "back.out(1.6)" }, 0.3)
+      .to(count, {
+        v: r.score, duration: 1.3, ease: "power2.out",
+        onUpdate: () => void (final.textContent = Math.round(count.v).toLocaleString("en-US")),
+      }, 0.45)
+      .fromTo(q(".grade"), { scale: 3, rotation: -20, autoAlpha: 0 }, { scale: 1, rotation: 0, autoAlpha: 1, duration: 0.45, ease: "back.out(2.2)" }, 1.5)
+      .from(this.overlay.querySelectorAll(".star"), { scale: 0, rotation: -40, duration: 0.4, ease: "back.out(2.5)", stagger: 0.14 }, 1.65)
+      .from(q(".fc-sub > :last-child"), { scale: 0, duration: 0.4, ease: "back.out(2)" }, 2.0)
+      .to(card, { y: 0, scale: 1, duration: 0.55, ease: "power3.inOut" }, 2.25)
+      .to(q(".rows"), { autoAlpha: 1, duration: 0.3 }, 2.6)
+      .fromTo(q(".finale-head"), { y: -50, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.45, ease: "back.out(1.6)" }, 2.35);
+    this.finaleAnim = tl;
+  }
+
+  setFinalePrompt(html: string) {
+    const p = this.overlay.querySelector(".finale-prompt");
+    if (p && p.innerHTML !== html) p.innerHTML = html;
   }
 }

@@ -3,6 +3,8 @@ import "./styles.css";
 import { Game } from "./game/game";
 import { connectLittle } from "./platform/little";
 import { Hud } from "./view/hud";
+import { INTRO_STILLS, Intro, preloadStills } from "./view/intro";
+import { TUTORIAL_STILLS } from "./view/tutorial";
 import { PropLibrary } from "./world/props";
 
 const stage = document.getElementById("stage")!;
@@ -23,12 +25,21 @@ if (little.isStub) {
 async function boot() {
   // The portal labels draw with both into canvases, so they must be ready first.
   await Promise.all([document.fonts.load('40px "Bungee"'), document.fonts.load('700 40px "Fredoka"')]).catch(() => undefined);
-  const lib = await PropLibrary.load((p) => hud.setLoading(p * 0.8));
+  const params = new URLSearchParams(location.search);
+  const intro = !params.has("autoplay") && !params.has("nointro");
+  const [lib] = await Promise.all([
+    PropLibrary.load((p) => hud.setLoading(p * 0.8)),
+    preloadStills([...(intro ? INTRO_STILLS : []), ...TUTORIAL_STILLS]),
+  ]);
   hud.setLoading(0.9);
   // Let the bar paint before the synchronous city build.
   await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
   const game = new Game(stage, lib, little, hud);
   hud.setLoading(1);
+  if (intro) {
+    const film = new Intro(stage, { sound: (kind) => game.introSound(kind), done: () => game.introDone() });
+    game.holdForIntro((now) => film.skip(now));
+  }
   hud.hideLoading();
   // One bad frame must not stop the loop for good; each distinct error is logged once.
   const seen = new Set<string>();

@@ -12,6 +12,9 @@ const BEAM_LEN = 19;
 const BEAM_H = 1.7;
 const CABLE_H = 46;
 const FINISH_R = 5.6;
+/** After the hero flies through the finish hoop: seconds it lingers, then seconds to shrink away. */
+const FINISH_LINGER = 0.6;
+const FINISH_SHRINK = 0.5;
 const UP = new Vector3(0, 1, 0);
 
 /** A blimp drifting back and forth along a line (x0, z0) to (x1, z1) at height y. */
@@ -50,6 +53,8 @@ export class Dressing {
   private blimpDir = 1;
   private blimpYaw = 0;
   private finishPop = 0;
+  /** Seconds since the hero flew through the finish hoop; -1 before. */
+  private finishAge = -1;
   private t = 0;
   private readonly m = new Matrix4();
   private readonly q = new Quaternion();
@@ -100,6 +105,7 @@ export class Dressing {
       c.anim = 0;
     }
     this.finishPop = 0;
+    this.finishAge = -1;
   }
 
   /** The hero clipped this girder: set it swinging. */
@@ -122,6 +128,7 @@ export class Dressing {
 
   passFinish() {
     this.finishPop = 1;
+    this.finishAge = 0;
   }
 
   update(dt: number) {
@@ -153,8 +160,12 @@ export class Dressing {
     this.coinMesh.instanceMatrix.needsUpdate = true;
 
     this.finishPop = Math.max(0, this.finishPop - dt * 1.5);
+    // Once flown through it pops, then shrinks away: the finish roof looks back over it.
+    if (this.finishAge >= 0) this.finishAge += dt;
+    const gone = this.finishAge < 0 ? 1 : Math.min(1, Math.max(0, 1 - (this.finishAge - FINISH_LINGER) / FINISH_SHRINK));
+    this.finishMesh.visible = gone > 0;
     this.finishMesh.rotation.z = this.t * 0.4;
-    this.finishMesh.scale.setScalar(FINISH_R * (1 + Math.sin(this.t * 5) * 0.04 + this.finishPop * 0.5));
+    this.finishMesh.scale.setScalar(FINISH_R * gone * (1 + Math.sin(this.t * 5) * 0.04 + this.finishPop * 0.5));
 
     const b = this.blimpPath;
     if (!b || !this.blimp) return;
