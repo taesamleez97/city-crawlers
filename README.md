@@ -77,8 +77,9 @@ The remote never plays the game; it only drives menus (OK, Back, arrows).
   drawn over it, a dashed "stand like this" outline, and the two targets where your fists
   land at full stretch. Steps: find your spot (the box turns green when both raised fists
   fit), then the first time only: shoot right, shoot left (skipping an arm you already
-  used on the rooftop), lean left, lean right. After that it's just finding your spot. OK
-  skips ahead once you're tracked.
+  used on the rooftop), lean left, lean right. After that it's just finding your spot. OK,
+  or punching both arms at once, skips ahead once you're tracked. Both arms at once is
+  also OK on the pause and results menus.
 - **In play**: the city fills the screen and the 3D arms copy yours. A small camera view
   comes up at the bottom center only while your framing needs fixing, and hides again once
   you're back in your spot.
