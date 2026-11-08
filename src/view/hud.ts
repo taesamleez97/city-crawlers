@@ -2,7 +2,6 @@
 // and data-little-* annotations so the Little agent can read and drive it.
 
 import { BodyGuide } from "./bodyGuide";
-import { LEFT_COLOR, LEAN_COLOR, RIGHT_COLOR, leanSvg, shootSvg } from "./cueStyle";
 
 export type MenuItem = {
   id: string;
@@ -106,6 +105,8 @@ export class Hud {
   private readonly loading: HTMLElement;
   private readonly pipSlot: HTMLElement;
   private readonly debugEl: HTMLElement;
+  private readonly reticle: HTMLElement;
+  private readonly credit: HTMLElement;
   private lastStats = "";
   private lastProgress = "";
 
@@ -141,10 +142,14 @@ export class Hud {
     this.fadeEl = el("div", "fade");
     this.loading = el("div", "loading", `<div class="logo"><span>CITY</span><span class="l2">CRAWLERS</span></div><div class="load-bar"><i></i></div>`);
     this.debugEl = el("pre", "motion-debug hidden");
+    this.reticle = el("div", "reticle hidden", "<i></i>");
+    this.credit = el("div", "credit hidden");
+    this.credit.dataset.little = "readout";
+    this.credit.dataset.littleLabel = "Map data credit";
     this.menu = new Menu("Menu");
     this.root.append(
       this.flashEl, this.top, this.pipSlot, this.callouts, this.center, this.prompt, this.hint, this.ready,
-      this.overlay, this.debugEl, this.fadeEl, this.loading,
+      this.overlay, this.reticle, this.credit, this.debugEl, this.fadeEl, this.loading,
     );
     this.showRunHud(false);
     this.showPip(false);
@@ -222,9 +227,31 @@ export class Hud {
     this.flashEl.style.opacity = "0";
   }
 
-  fade(to: number, ms = 250) {
+  /** Fade the whole screen to `color` (white for the jump through a portal). */
+  fade(to: number, ms = 250, color = "#0d1226") {
+    if (to > 0) this.fadeEl.style.background = color;
     this.fadeEl.style.transition = `opacity ${ms}ms ease`;
     this.fadeEl.style.opacity = String(to);
+  }
+
+  /** The rooftop aim point, in stage pixels; `lock` colors it when it's over a portal. */
+  setReticle(pos: { x: number; y: number } | null, lock: string | null = null) {
+    this.reticle.classList.toggle("hidden", !pos);
+    if (!pos) return;
+    this.reticle.style.transform = `translate(${pos.x.toFixed(1)}px, ${pos.y.toFixed(1)}px)`;
+    this.reticle.classList.toggle("lock", !!lock);
+    this.reticle.style.setProperty("--lock", lock ?? "#ffffff");
+  }
+
+  /** Whose map the city on screen is built from (OpenStreetMap's license asks for it in view). */
+  setCredit(text: string | null) {
+    this.credit.classList.toggle("hidden", !text);
+    if (text) this.credit.textContent = `Map data ${text}`;
+  }
+
+  setHubPrompt(html: string) {
+    const p = this.overlay.querySelector(".hub-prompt");
+    if (p && p.innerHTML !== html) p.innerHTML = html;
   }
 
   setDebug(text: string | null) {
@@ -250,44 +277,47 @@ export class Hud {
   }
 
   // ---------------------------------------------------------------- menus
-  private open(html: string, label: string, items: MenuItem[], focus = 0) {
+  private open(html: string, label: string, items: MenuItem[], focus = 0, mode = "") {
     this.overlay.innerHTML = html;
+    this.overlay.className = `overlay ${mode}`;
     this.overlay.dataset.little = "region";
     this.overlay.dataset.littleLabel = label;
     this.menu.set(items, focus);
     (this.overlay.querySelector(".menu-slot") ?? this.overlay).append(this.menu.root);
-    this.overlay.classList.remove("hidden");
+    this.root.classList.toggle("on-hub", mode === "hub-mode");
     this.menuOpen = true;
   }
 
   close() {
     this.overlay.classList.add("hidden");
+    this.root.classList.remove("on-hub");
     this.menuOpen = false;
   }
 
-  showTitle(items: MenuItem[], cameraNote: string, focus = 0) {
+  /** The rooftop: the city stays in view, with a prompt up top and the cities as buttons along the bottom. */
+  showHub(items: MenuItem[], focus: number, note: string) {
     this.open(
-      `<div class="title">
-        <div class="logo big"><span>CITY</span><span class="l2">CRAWLERS</span></div>
-        <div class="tagline">Swing through the city to the beat. Shoot your webs with your own arms.</div>
-        <div class="menu-slot levels"></div>
-        ${controlsCard()}
-        ${cameraNote ? `<div class="camera-note">${cameraNote}</div>` : ""}
+      `<div class="hub">
+        <div class="hub-head">
+          <div class="logo"><span>CITY</span><span class="l2">CRAWLERS</span></div>
+          <div class="hub-title">Choose your city</div>
+          <div class="hub-prompt" data-little="readout" data-little-label="Rooftop prompt"></div>
+        </div>
+        <div class="menu-slot hub-cities"></div>
+        <div class="hub-note">${note}</div>
       </div>`,
-      "Title",
+      "City select",
       items,
       focus,
+      "hub-mode",
     );
-    this.overlay.classList.add("title-mode");
   }
 
   showPause(items: MenuItem[], note = "") {
-    this.overlay.classList.remove("title-mode");
     this.open(`<div class="panel"><h2>PAUSED</h2>${note ? `<div class="note">${note}</div>` : ""}<div class="menu-slot"></div></div>`, "Pause menu", items);
   }
 
   showResults(r: Results, items: MenuItem[]) {
-    this.overlay.classList.remove("title-mode");
     const stars = [1, 2, 3].map((i) => `<span class="star ${i <= r.stars ? "on" : ""}" style="animation-delay:${0.25 + i * 0.18}s">★</span>`).join("");
     const rows = r.rows.map(([k, v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`).join("");
     this.open(
@@ -309,14 +339,4 @@ export class Hud {
       items,
     );
   }
-}
-
-function controlsCard() {
-  const shoot = (side: number, color: string) => `<i class="mini-cue hand" style="background:${color}">${shootSvg(side)}</i>`;
-  const lean = (side: number) => `<i class="mini-cue lean" style="background:${LEAN_COLOR}">${leanSvg(side)}</i>`;
-  // Stance and framing are taught on the get-ready screen.
-  return `<div class="controls moves">
-    <div>${shoot(-1, LEFT_COLOR)}${shoot(1, RIGHT_COLOR)}<span><b>Shoot a web</b> when a ring's circle locks on: punch that arm out toward it</span></div>
-    <div>${lean(-1)}${lean(1)}<span><b>Lean</b> where the arrows point to dodge girders</span></div>
-  </div>`;
 }

@@ -206,6 +206,14 @@ body {
   bottom: calc(var(--little-safe-bottom) + 24px);
   transform: translateX(-50%);
 }
+.hud.on-hub .pip-slot {
+  left: auto;
+  right: calc(var(--little-safe-right) + 28px);
+  top: calc(var(--little-safe-top) + 28px);
+  bottom: auto;
+  transform: scale(0.8);
+  transform-origin: top right;
+}
 .motion-debug {
   position: absolute;
   right: calc(var(--little-safe-right) + 24px);
@@ -491,18 +499,6 @@ kbd {
   background: rgba(16, 20, 44, 0.55);
   pointer-events: auto;
 }
-.overlay.title-mode {
-  background: linear-gradient(90deg, rgba(16, 20, 44, 0.72) 0%, rgba(16, 20, 44, 0.25) 55%, rgba(16, 20, 44, 0) 100%);
-  justify-content: flex-start;
-  padding-left: calc(var(--little-safe-left) + 120px);
-}
-.title {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 18px;
-  animation: slidein 0.6s ease-out both;
-}
 .logo {
   font-size: 92px;
   line-height: 0.95;
@@ -519,18 +515,6 @@ kbd {
 }
 .logo .l2 {
   color: #fff;
-}
-.tagline {
-  font-size: 38px;
-  font-weight: 600;
-  text-shadow: 0 3px 0 var(--ink);
-  max-width: 860px;
-}
-.best {
-  font-family: "Bungee", sans-serif;
-  font-size: 36px;
-  color: var(--gold);
-  text-shadow: 0 4px 0 var(--ink);
 }
 .menu {
   display: flex;
@@ -561,10 +545,6 @@ kbd {
 .btn.focused::before {
   content: "▶ ";
 }
-/* Level buttons: name, then a line of detail (best score, or what unlocks it). */
-.menu-slot.levels .menu {
-  gap: 14px;
-}
 .btn.rich {
   display: flex;
   flex-direction: column;
@@ -574,14 +554,6 @@ kbd {
 }
 .btn.rich.focused::before {
   content: none;
-}
-.btn.rich.focused .lvl-name::before {
-  content: "▶ ";
-}
-.btn.rich .lvl-name i {
-  font-style: normal;
-  margin-right: 16px;
-  opacity: 0.45;
 }
 .btn.rich small {
   font-family: "Fredoka", system-ui, sans-serif;
@@ -597,82 +569,6 @@ kbd {
 .btn.locked.focused {
   background: #dfe2ef;
   box-shadow: 0 10px 0 #9aa0bb, 0 0 0 8px #fff;
-}
-.controls {
-  display: grid;
-  grid-template-columns: repeat(2, auto);
-  gap: 16px 40px;
-  margin-top: 18px;
-  background: var(--ink-soft);
-  border-radius: 28px;
-  padding: 26px 34px;
-  font-size: 30px;
-  font-weight: 600;
-}
-.controls > div {
-  display: flex;
-  align-items: center;
-}
-.controls span {
-  margin-left: 8px;
-}
-.controls.moves {
-  grid-template-columns: 1fr;
-  gap: 6px;
-  margin-top: 0;
-  padding: 18px 30px;
-  max-width: 900px;
-  font-size: 27px;
-  font-weight: 500;
-}
-.controls b {
-  font-weight: 700;
-  color: var(--gold);
-}
-.mini-fig {
-  display: inline-flex;
-  width: 56px;
-  height: 56px;
-}
-.mini-fig svg {
-  width: 56px;
-  height: 56px;
-}
-.camera-note {
-  font-size: 28px;
-  font-weight: 600;
-  color: var(--gold);
-  text-shadow: 0 3px 0 var(--ink);
-}
-.camera-note kbd {
-  height: 44px;
-  min-width: 48px;
-  font-size: 22px;
-  margin: 0 6px;
-}
-.mini-cue {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 58px;
-  height: 58px;
-  margin-right: 8px;
-  border: 4px solid #fff;
-  box-shadow: 0 0 0 3px var(--ink);
-}
-.mini-cue.hand {
-  border-radius: 50%;
-}
-.mini-cue.lean {
-  width: 70px;
-  border-radius: 16px;
-}
-.mini-cue svg {
-  width: 34px;
-  height: 34px;
-}
-.mini-cue.lean svg {
-  width: 44px;
 }
 .panel {
   display: flex;
@@ -816,6 +712,150 @@ kbd {
   color: #ffb4b8;
   font: 600 30px/1.4 "Fredoka", system-ui, sans-serif;
   white-space: pre-wrap;
+}
+
+/* ---------------------------------------------------------------- rooftop city select */
+.overlay.hub-mode {
+  align-items: stretch;
+  background: linear-gradient(
+    180deg,
+    rgba(16, 20, 44, 0.55) 0%,
+    rgba(16, 20, 44, 0) 22%,
+    rgba(16, 20, 44, 0) 76%,
+    rgba(16, 20, 44, 0.55) 100%
+  );
+  /* The city behind takes the mouse (aim and shoot); only the buttons are clickable. */
+  pointer-events: none;
+}
+.hub {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+}
+.hub-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  animation: panelin 0.5s ease-out both;
+}
+.hub-head .logo {
+  display: flex;
+  gap: 20px;
+  font-size: 46px;
+  -webkit-text-stroke-width: 9px;
+  text-shadow: 0 6px 0 var(--ink);
+  color: var(--gold);
+}
+.hub-title {
+  font-family: "Bungee", "Fredoka", sans-serif;
+  font-size: 76px;
+  line-height: 1;
+  paint-order: stroke fill;
+  -webkit-text-stroke: 13px var(--ink);
+  text-shadow: 0 8px 0 var(--ink);
+}
+.hub-prompt {
+  margin-top: 6px;
+  padding: 10px 32px;
+  border-radius: 999px;
+  background: var(--ink-soft);
+  font-size: 32px;
+  font-weight: 600;
+}
+.hub-prompt:empty {
+  display: none;
+}
+.hub-prompt b {
+  color: var(--gold);
+}
+.hub-cities .menu {
+  flex-direction: row;
+  gap: 24px;
+  min-width: 0;
+}
+.hub-cities .btn {
+  pointer-events: auto;
+}
+.hub-cities .btn.rich {
+  align-items: center;
+  min-width: 300px;
+  padding: 12px 30px 14px;
+  font-size: 40px;
+  text-align: center;
+}
+.hub-cities .city-name {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.hub-cities .city-name i {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px var(--ink);
+}
+.hub-note {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -30px;
+  text-align: center;
+  font-size: 19px;
+  font-weight: 600;
+  opacity: 0.85;
+  text-shadow: 0 2px 0 var(--ink);
+}
+.reticle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.reticle i {
+  position: absolute;
+  left: -46px;
+  top: -46px;
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  border: 8px solid #fff;
+  box-shadow: 0 0 0 4px var(--ink), inset 0 0 0 4px var(--ink);
+  transition: transform 120ms, border-color 120ms;
+}
+.reticle i::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 4px var(--ink);
+}
+.reticle.lock i {
+  border-color: var(--lock);
+  transform: scale(0.8);
+}
+.reticle.lock i::after {
+  background: var(--lock);
+}
+.credit {
+  position: absolute;
+  left: calc(var(--little-safe-left) + 26px);
+  bottom: calc(var(--little-safe-bottom) + 14px);
+  max-width: 1300px;
+  font-size: 18px;
+  font-weight: 600;
+  opacity: 0.85;
+  text-shadow: 0 2px 0 var(--ink);
 }
 
 @keyframes pop {

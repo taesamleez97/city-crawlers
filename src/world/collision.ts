@@ -10,6 +10,8 @@ export interface Collider {
   anchor: boolean;
   id: number;
   dynamic?: boolean;
+  /** A vertical prism over this footprint (x, z pairs) between min.y and max.y; the box bounds it. */
+  poly?: Float32Array;
 }
 
 export type RayHit = { point: Vector3; normal: Vector3; dist: number; collider: Collider };
@@ -25,6 +27,20 @@ export class CollisionWorld {
   readonly all: Collider[] = [];
   private stamp = 0;
   private readonly seen = new Map<Collider, number>();
+
+  /** A building from a real footprint: its walls and roof, not its bounding box. */
+  addPrism(poly: Float32Array, y0: number, y1: number, kind: ColliderKind, anchor: boolean): Collider {
+    const min = new Vector3(Infinity, y0, Infinity), max = new Vector3(-Infinity, y1, -Infinity);
+    for (let i = 0; i < poly.length; i += 2) {
+      min.x = Math.min(min.x, poly[i]);
+      max.x = Math.max(max.x, poly[i]);
+      min.z = Math.min(min.z, poly[i + 1]);
+      max.z = Math.max(max.z, poly[i + 1]);
+    }
+    const c = this.add(min, max, kind, anchor);
+    c.poly = poly;
+    return c;
+  }
 
   add(min: Vector3, max: Vector3, kind: ColliderKind, anchor: boolean, dynamic = false): Collider {
     const c: Collider = { min: min.clone(), max: max.clone(), kind, anchor, id: this.all.length, dynamic };
@@ -70,7 +86,8 @@ export class CollisionWorld {
       Math.max(origin.x, end.x), Math.max(origin.z, end.z),
       (c) => {
         if (anchorOnly && !c.anchor) return;
-        const hit = rayBox(origin, inv, c.min, c.max);
+        // A ray can start inside a turned building's box while outside the building.
+        const hit = c.poly ? rayPrism(origin, dir, c.poly, c.min.y, c.max.y) : rayBox(origin, inv, c.min, c.max);
         if (!hit || hit.t > maxDist || hit.t < 0) return;
         if (!best || hit.t < best.dist) {
           best = {
@@ -110,6 +127,54 @@ export class CollisionWorld {
     });
     return out;
   }
+}
+
+function insidePoly(poly: Float32Array, x: number, z: number) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
+    const xi = poly[i], zi = poly[i + 1], xj = poly[j], zj = poly[j + 1];
+    if (zi > z !== zj > z && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** Nearest hit on a prism's walls or caps from outside it. */
+function rayPrism(o: Vector3, d: Vector3, poly: Float32Array, y0: number, y1: number): { t: number; normal: Vector3 } | null {
+  let best = Infinity, nx = 0, ny = 0, nz = 0;
+  for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
+    const ax = poly[j], az = poly[j + 1];
+    const ex = poly[i] - ax, ez = poly[i + 1] - az;
+    const den = d.x * ez - d.z * ex;
+    if (Math.abs(den) < 1e-9) continue;
+    const wx = ax - o.x, wz = az - o.z;
+    const t = (wx * ez - wz * ex) / den;
+    if (t < 0 || t >= best) continue;
+    const u = (wx * d.z - wz * d.x) / den;
+    if (u < 0 || u > 1) continue;
+    const y = o.y + d.y * t;
+    if (y < y0 || y > y1) continue;
+    best = t;
+    // Wall normal, turned to face the ray.
+    const len = Math.hypot(ex, ez);
+    nx = ez / len;
+    nz = -ex / len;
+    if (nx * d.x + nz * d.z > 0) {
+      nx = -nx;
+      nz = -nz;
+    }
+    ny = 0;
+  }
+  if (Math.abs(d.y) > 1e-9) {
+    for (const [y, n] of [[y1, 1], [y0, -1]] as const) {
+      const t = (y - o.y) / d.y;
+      if (t < 0 || t >= best || n * d.y > 0) continue;
+      if (!insidePoly(poly, o.x + d.x * t, o.z + d.z * t)) continue;
+      best = t;
+      nx = nz = 0;
+      ny = n;
+    }
+  }
+  return best < Infinity ? { t: best, normal: new Vector3(nx, ny, nz) } : null;
 }
 
 function rayBox(o: Vector3, inv: Vector3, min: Vector3, max: Vector3): { t: number; normal: Vector3 } | null {

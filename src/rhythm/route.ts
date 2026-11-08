@@ -1,4 +1,4 @@
-// The on-rails route: the chart turned into a path through Downtown.
+// The on-rails route: the chart turned into a path down a city's streets.
 //
 // Each hand cue starts one swing that lasts until the next hand cue. Position is
 // a function of "route beats" r: on time, r equals the music beat; after a miss
@@ -16,18 +16,35 @@ import { Vector3 } from "three";
 import { TUNING } from "../config";
 import { clamp, damp, dampAngle, smoothstep } from "../core/math";
 import { flightPitch } from "../view/cameraRig";
-import { BANNERS, FINISH, ROUTE, SKYBRIDGES, START } from "../world/cityLayout";
 import type { CollisionWorld } from "../world/collision";
 import { BEAT, type Cue, FINISH_BEAT, LEAP_BEAT, RESULTS_BEAT, type Side, sectionAt } from "./song";
 
 const UP = new Vector3(0, 1, 0);
-const CORNER_RADIUS = 34;
 const SAMPLES_PER_BEAT = 16;
 const LEAP_DIST = 16;
 /** Forward speed varies ±40% over a swing: slow at the tops, fast through the bottom. */
 const SWING_EASE = 0.4;
 const CLEARANCE = 1.6;
-const PERCH_Y = START.y + 0.9;
+/** Bends gentler than this (radians) don't count as corners: no forced swing side. */
+const CORNER_MIN_TURN = 0.45;
+
+/** Something across the street the rail rises over or ducks under (meters). */
+export type Obstacle = { x: number; z: number; half: number; lo: number; hi: number; mode: "over" | "under" };
+
+/** Where a city's route runs. */
+export interface CourseDef {
+  /** Street centerline from the start perch to the finish ring (x, z; ground plane). */
+  path: Array<[number, number]>;
+  /** Name of the street each path segment runs along. */
+  streets: string[];
+  /** Roof the hero leaps from. */
+  perchY: number;
+  finishY: number;
+  cornerRadius: number;
+  /** Height the swings top out at (default 30 m). */
+  topY?: number;
+  obstacles?: Obstacle[];
+}
 
 /** Lean obstacles sit this far (beats) after their cue, so an on-time lean is already clear. */
 export const BEAM_DELAY = 0.5;
@@ -98,7 +115,8 @@ class Centerline {
   private readonly xs: number[] = [];
   private readonly zs: number[] = [];
   private readonly ss: number[] = [];
-  readonly corners: Array<{ s: number; turn: Side }> = [];
+  /** One per interior path point, at the middle of its rounded bend; `angle` is how far it turns. */
+  readonly corners: Array<{ s: number; turn: Side; angle: number }> = [];
   length = 0;
 
   constructor(poly: Array<[number, number]>, radius: number) {
@@ -138,7 +156,8 @@ class Centerline {
         push(a * p1x + b * bx + c * p2x, a * p1z + b * bz + c * p2z);
         if (k === steps / 2) {
           // right(d1) · d2 > 0 means a right turn.
-          this.corners.push({ s: this.ss[this.ss.length - 1], turn: -d1z * d2x + d1x * d2z > 0 ? 1 : -1 });
+          const angle = Math.acos(clamp(d1x * d2x + d1z * d2z, -1, 1));
+          this.corners.push({ s: this.ss[this.ss.length - 1], turn: -d1z * d2x + d1x * d2z > 0 ? 1 : -1, angle });
         }
       }
     }
@@ -189,7 +208,7 @@ class Centerline {
   }
 }
 
-type Obstacle = { s: number; half: number; lo: number; hi: number; mode: "over" | "under" };
+type RailObstacle = { s: number; half: number; lo: number; hi: number; mode: "over" | "under" };
 
 export class Route {
   readonly cues: Cue[];
@@ -197,7 +216,11 @@ export class Route {
   readonly beams: Beam[] = [];
   readonly coins: Coin[] = [];
   readonly length: number;
-  readonly finish = new Vector3(FINISH.x, FINISH.y, FINISH.z);
+  readonly finish: Vector3;
+  /** Direction of travel through the finish ring. */
+  readonly finishDir: Vector3;
+  private readonly perchY: number;
+  private readonly finishY: number;
   private readonly line: Centerline;
   private readonly r0 = LEAP_BEAT;
   private readonly r1 = RESULTS_BEAT + 4;
@@ -210,11 +233,16 @@ export class Route {
   private readonly tmpP = new Vector3();
   private readonly tmpT = new Vector3();
 
-  constructor(world: CollisionWorld, cues: Cue[]) {
-    const poly: Array<[number, number]> = [[START.x, START.z], ...ROUTE.slice(1, -1), [FINISH.x, FINISH.z]];
-    this.line = new Centerline(poly, CORNER_RADIUS);
+  constructor(world: CollisionWorld, cues: Cue[], private readonly course: CourseDef) {
+    const poly = course.path;
+    this.line = new Centerline(poly, course.cornerRadius);
     this.length = this.line.length;
     this.cues = cues;
+    this.perchY = course.perchY + 0.9;
+    this.finishY = course.finishY;
+    const [fx, fz] = poly[poly.length - 1], [px, pz] = poly[poly.length - 2];
+    this.finish = new Vector3(fx, course.finishY, fz);
+    this.finishDir = new Vector3(fx - px, 0, fz - pz).normalize();
 
     this.planSwings();
     const obstacles = this.planObstacles();
@@ -285,6 +313,7 @@ export class Route {
     });
     // Corner swings web the inside of the turn.
     for (const c of this.line.corners) {
+      if (c.angle < CORNER_MIN_TURN) continue;
       const i = this.swings.findIndex((w) => c.s >= w.s0 && c.s < w.s0 + w.dist);
       if (i < 0) continue;
       const u = (c.s - this.swings[i].s0) / this.swings[i].dist;
@@ -295,25 +324,12 @@ export class Route {
     }
   }
 
-  private planObstacles(): Obstacle[] {
-    const out: Obstacle[] = [];
-    // Which way the rail passes each one: [banners], [skybridges].
-    const bannerModes: Array<Obstacle["mode"]> = ["under", "over", "under"];
-    const bridgeModes: Array<Obstacle["mode"]> = ["over", "under", "under"];
-    BANNERS.forEach((b, i) => {
-      const s = this.line.project((b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2);
-      out.push({ s, half: 3, lo: b.y, hi: b.y + b.h + 0.35, mode: bannerModes[i] ?? "under" });
-    });
-    SKYBRIDGES.forEach((b, i) => {
-      const s = this.line.project((b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2);
-      const along = Math.min(b.x1 - b.x0, b.z1 - b.z0);
-      out.push({ s, half: along / 2 + 2.5, lo: b.y0 - 0.5, hi: b.y1 + 0.5, mode: bridgeModes[i] ?? "under" });
-    });
-    return out;
+  private planObstacles(): RailObstacle[] {
+    return (this.course.obstacles ?? []).map((o) => ({ s: this.line.project(o.x, o.z), half: o.half, lo: o.lo, hi: o.hi, mode: o.mode }));
   }
 
   /** 1 across the obstacle, easing to 0 over 24 m either side. */
-  private window(s: number, o: Obstacle) {
+  private window(s: number, o: RailObstacle) {
     const d = Math.abs(s - o.s) - o.half;
     if (d <= 0) return 1;
     if (d >= 24) return 0;
@@ -321,7 +337,7 @@ export class Route {
   }
 
   private topY(s: number) {
-    return 30 - 3 * smoothstep(this.length - 140, this.length, s);
+    return (this.course.topY ?? 30) - 3 * smoothstep(this.length - 140, this.length, s);
   }
 
   private swingIndex(r: number) {
@@ -337,18 +353,19 @@ export class Route {
 
   private rawAt(r: number): { s: number; y: number; lat: number } {
     const first = this.swings[0];
-    if (r <= LEAP_BEAT) return { s: 0, y: PERCH_Y, lat: 0 };
+    const perch = this.perchY;
+    if (r <= LEAP_BEAT) return { s: 0, y: perch, lat: 0 };
     if (r < first.start) {
       const u = (r - LEAP_BEAT) / (first.start - LEAP_BEAT);
       const top = this.topY(LEAP_DIST);
       const hop = 5;
-      return { s: LEAP_DIST * u, y: PERCH_Y + hop * u - (PERCH_Y - top + hop) * u * u, lat: 0 };
+      return { s: LEAP_DIST * u, y: perch + hop * u - (perch - top + hop) * u * u, lat: 0 };
     }
     if (r >= FINISH_BEAT) {
       const last = this.swings[this.swings.length - 1];
       const vEnd = ((1 - SWING_EASE) * last.dist) / (last.end - last.start);
       const e = r - FINISH_BEAT;
-      return { s: this.length + vEnd * 1.6 * (1 - Math.exp(-e / 1.6)), y: FINISH.y + 2.5 * (1 - Math.exp(-e / 1.2)), lat: 0 };
+      return { s: this.length + vEnd * 1.6 * (1 - Math.exp(-e / 1.6)), y: this.finishY + 2.5 * (1 - Math.exp(-e / 1.2)), lat: 0 };
     }
     const w = this.swings[this.swingIndex(r)];
     const u = (r - w.start) / (w.end - w.start);
@@ -515,6 +532,16 @@ export class Route {
       out.u = w ? (r - w.start) / (w.end - w.start) : (r - LEAP_BEAT) / (this.swings[0].start - LEAP_BEAT);
     }
     return out;
+  }
+
+  /** The street the hero is over at route beat r. */
+  streetAt(r: number): string {
+    const f = clamp((r - this.r0) * SAMPLES_PER_BEAT, 0, this.sS.length - 1);
+    const s = this.sS[Math.round(f)];
+    let k = 0;
+    while (k < this.line.corners.length && this.line.corners[k].s <= s) k++;
+    const names = this.course.streets;
+    return names[Math.min(k, names.length - 1)] ?? "";
   }
 
   /** Debug summary: where corners and obstacles fall. */

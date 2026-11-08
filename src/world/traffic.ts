@@ -21,18 +21,20 @@ export class Traffic {
   private readonly p = new Vector3();
   private readonly one = new Vector3(1, 1, 1);
 
-  constructor(lib: PropLibrary, material: Material, lanes: TrafficLane[]) {
+  /** `models` may repeat a name to make it more common. */
+  constructor(lib: PropLibrary, material: Material, lanes: TrafficLane[], models: readonly string[] = MODELS, private readonly y = 0.05) {
     const rng = mulberry32(7);
-    const counts = MODELS.map(() => 0);
+    const names = [...new Set(models)];
+    const counts = names.map(() => 0);
     for (const lane of lanes) {
       const len = Math.hypot(lane.bx - lane.ax, lane.bz - lane.az);
       const yaw = Math.atan2(lane.bx - lane.ax, lane.bz - lane.az) + MODEL_YAW;
       for (let i = 0; i < lane.count; i++) {
-        const model = Math.floor(rng() * MODELS.length);
+        const model = names.indexOf(models[Math.floor(rng() * models.length)]);
         this.cars.push({ lane, t: (i + rng() * 0.6) / lane.count, speed: 9 + rng() * 5, model, slot: counts[model]++, yaw, len });
       }
     }
-    MODELS.forEach((name, i) => {
+    names.forEach((name, i) => {
       const mesh = new InstancedMesh(lib.get(`kit:${name}`), material, Math.max(1, counts[i]));
       mesh.count = counts[i];
       mesh.castShadow = false;
@@ -48,11 +50,16 @@ export class Traffic {
     for (const c of this.cars) {
       c.t = (c.t + (c.speed * dt) / c.len) % 1;
       const { lane } = c;
-      this.p.set(lane.ax + (lane.bx - lane.ax) * c.t, 0.05, lane.az + (lane.bz - lane.az) * c.t);
+      this.p.set(lane.ax + (lane.bx - lane.ax) * c.t, this.y, lane.az + (lane.bz - lane.az) * c.t);
       this.q.setFromEuler(this.e.set(0, c.yaw, 0));
       this.m.compose(this.p, this.q, this.one);
       this.meshes[c.model].setMatrixAt(c.slot, this.m);
     }
     for (const m of this.meshes) m.instanceMatrix.needsUpdate = true;
+  }
+
+  /** The vehicle geometry belongs to the prop library: only the instance buffers go. */
+  dispose() {
+    for (const m of this.meshes) m.dispose();
   }
 }

@@ -1,6 +1,6 @@
 import {
-  Color, DirectionalLight, Fog, HemisphereLight, type Material, type Mesh, NoToneMapping, PCFShadowMap, PerspectiveCamera,
-  Scene, SRGBColorSpace, Vector3, WebGLRenderer,
+  Color, DirectionalLight, Fog, Group, HemisphereLight, type InstancedMesh, type Material, type Mesh, type MeshBasicMaterial,
+  NoToneMapping, type Object3D, PCFShadowMap, PerspectiveCamera, Quaternion, Scene, SRGBColorSpace, Vector3, WebGLRenderer,
 } from "three";
 
 import { TUNING } from "../config";
@@ -14,27 +14,32 @@ import { Dressing } from "../rhythm/dressing";
 import { type CueRt, HAND_HOLD, Judge, type Judgment } from "../rhythm/judge";
 import { Conductor } from "../rhythm/music";
 import { BEAM_DELAY, DODGE_OFFSET, Route, newSample } from "../rhythm/route";
-import {
-  BEAT, type CueKind, FINISH_BEAT, LEAP_BEAT, LEVELS, type Level, type LevelId, RESULTS_BEAT, type Side, buildChart, levelById,
-  sectionAt,
-} from "../rhythm/song";
+import { BEAT, type CueKind, FINISH_BEAT, LEAP_BEAT, RESULTS_BEAT, type Side, buildChart } from "../rhythm/song";
 import { ArmsView, type BodyArm } from "../view/arms";
 import { CameraRig } from "../view/cameraRig";
 import { LEFT_COLOR, RIGHT_COLOR, figureSvg } from "../view/cueStyle";
 import { Particles, SpeedLines, WebLine } from "../view/fx";
 import { type Hud, type MenuItem } from "../view/hud";
 import { WorldCues } from "../view/worldCues";
-import { type CityData, buildCity } from "../world/city";
+import { Backdrop } from "../world/backdrop";
+import { CITIES, type CityId, type CityStyle, cityById } from "../world/cities";
+import { buildCity } from "../world/city";
+import { START } from "../world/cityLayout";
+import type { CollisionWorld } from "../world/collision";
 import { createWorldMaterial } from "../world/materials";
 import { pal } from "../world/palette";
 import type { PropLibrary } from "../world/props";
+import { type CityFile, buildRealCity } from "../world/realCity";
 import { Sky } from "../world/sky";
 import { Traffic } from "../world/traffic";
+import { HUB_ORDER, HUB_PITCH, Hub, armAim, armRaised, camDir } from "./hub";
 import type { Subject, SubjectState } from "./subject";
 
-type State = "title" | "ready" | "play" | "paused" | "resuming" | "results";
+/** hub: the rooftop city select. warp: zipping through a portal to the chosen city. */
+type State = "hub" | "warp" | "ready" | "play" | "paused" | "resuming" | "results";
 
-const SUN_DIR = new Vector3(-0.5, 0.85, 0.45).normalize();
+const HUB_SUN = new Vector3(-0.5, 0.85, 0.45).normalize();
+const HUB_EYE = new Vector3(START.x, START.y + 1.2, START.z);
 const FIRST_CUE_BEAT = 8;
 /** After a resume, cues this close (seconds) are waved through: nobody can react that fast. */
 const RESUME_GRACE = 0.75;
@@ -45,34 +50,66 @@ const RECOVERY_DELAY = 0.3;
 const PIP_SHOW_AFTER = 0.25;
 const PIP_HIDE_AFTER = 1.5;
 const NO_FOCUS: [number, number] = [0, 0];
-/** Accuracy that clears a level and opens the next one. */
-const CLEAR_ACCURACY = 0.6;
-const PROGRESS_KEY = "cc.progress";
+const BEST_KEY = "cc.best.v2";
 /** Seconds ahead an arm starts aiming at its next ring (about when the approach circle shows). */
 const AIM_LOOKAHEAD = 1.2;
+/** The rooftop reticle follows the remote's choice this long after a press, even with an arm up (seconds). */
+const MENU_AIM_HOLD = 2.5;
+/** Mouse aim (desk testing) holds this long after the last move (seconds). */
+const MOUSE_AIM_HOLD = 4;
+/** Body shots on the rooftop count once the camera has followed the player this long (seconds)… */
+const HUB_SETTLE = 1;
+/** …and only at a portal the arm had the reticle on this recently (seconds). */
+const AIMED_WITHIN = 0.6;
+/** Through a portal: the web flies, the zip, the white-out, then the city (seconds). */
+const WARP_ZIP_AT = 0.18;
+const WARP_ZIP_FOR = 0.95;
+const WARP_WHITE_AT = 0.72;
+const WARP_ARRIVE_AT = 1.1;
 
-type Progress = { best: Record<LevelId, number>; cleared: number };
+type Best = Partial<Record<CityId, number>>;
 type Course = { route: Route; judge: Judge; dressing: Dressing; cues: WorldCues; swingOfCue: Map<number, number> };
+/** What's on stage: the rooftop (Downtown) or a city from map data. */
+type Venue = {
+  id: "hub" | CityId;
+  group: Group;
+  world: CollisionWorld;
+  chunks: Mesh[];
+  traffic: Traffic;
+  backdrop: Backdrop | null;
+  course: Course | null;
+  attribution: string;
+  dispose(): void;
+};
 const num = (v: unknown) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.max(0, n) : 0;
 };
 
-type StepId = "frame" | "stance" | "shootR" | "shootL" | "leanL" | "leanR";
+type StepId = "frame" | "shootR" | "shootL" | "leanL" | "leanR";
 type Step = { id: StepId; label: string; hint: string; done: boolean };
-const STEPS: Array<Omit<Step, "done">> = [
-  { id: "frame", label: "Find your spot", hint: "Back up until the box turns green. Your fists need room above your head." },
-  { id: "stance", label: "Fists up by your shoulders", hint: "Your ready pose: it loads your web-shooters." },
-  { id: "shootR", label: `Shoot a web <b class="cr">RIGHT</b>`, hint: `Punch your right arm up and out to the <b class="cr">pink</b> dot. No need to lock your elbow.` },
-  { id: "shootL", label: `Shoot a web <b class="cl">LEFT</b>`, hint: `Pull back, then punch your left arm out to the <b class="cl">blue</b> dot.` },
-  { id: "leanL", label: `Lean <b class="co">LEFT</b>`, hint: "Shift your shoulders over to your left." },
-  { id: "leanR", label: `Lean <b class="co">RIGHT</b>`, hint: "And over to your right." },
-];
-const stepFor = (lv: Level, id: StepId) =>
-  id === "frame" || (lv.shoots && (id === "stance" || id === "shootR" || id === "shootL")) || (lv.leans && (id === "leanL" || id === "leanR"));
-const STEP_FIGURE: Record<StepId, Parameters<typeof figureSvg>[0]> = {
-  frame: "frame", stance: "stance", shootR: "shootR", shootL: "shootL", leanL: "leanL", leanR: "leanR",
+const STEPS: Record<StepId, Omit<Step, "done" | "id">> = {
+  frame: { label: "Find your spot", hint: "Back up until the box turns green. Your fists need room above your head." },
+  shootR: { label: `Shoot a web <b class="cr">RIGHT</b>`, hint: `Punch your right arm up and out to the <b class="cr">pink</b> dot. No need to lock your elbow.` },
+  shootL: { label: `Shoot a web <b class="cl">LEFT</b>`, hint: `Pull back, then punch your left arm out to the <b class="cl">blue</b> dot.` },
+  leanL: { label: `Lean <b class="co">LEFT</b>`, hint: "Shift your shoulders over to your left: that's how you dodge." },
+  leanR: { label: `Lean <b class="co">RIGHT</b>`, hint: "And over to your right." },
 };
+
+/** Free a venue's GPU buffers, leaving what it borrowed (the prop library, the shared world material). */
+function disposeTree(root: Object3D, keep: Set<object>) {
+  root.traverse((o) => {
+    const m = o as Mesh;
+    if (m.geometry && !keep.has(m.geometry)) m.geometry.dispose();
+    const mats = Array.isArray(m.material) ? m.material : m.material ? [m.material] : [];
+    for (const mat of mats) {
+      if (keep.has(mat)) continue;
+      (mat as MeshBasicMaterial).map?.dispose();
+      mat.dispose();
+    }
+    if ((o as InstancedMesh).isInstancedMesh) (o as InstancedMesh).dispose();
+  });
+}
 
 class Rider implements Subject {
   readonly pos = new Vector3();
@@ -98,18 +135,24 @@ export class Game {
   private readonly sun = new DirectionalLight(pal("sun"), 1.8);
   private readonly hemi = new HemisphereLight(pal("hemi_sky"), pal("hemi_ground"), 2.0);
   private readonly fog: Fog;
-  private readonly city: CityData;
   private readonly material: Material;
-  // The current level's course (see useLevel).
-  private level: Level = LEVELS[0];
+  /** Shared geometry and material that venue teardown must leave alone. */
+  private readonly borrowed: Set<object>;
+  private readonly hub: Hub;
+  private readonly hubVenue: Venue;
+  /** The one map city kept built (the last one visited). */
+  private cityVenue: Venue | null = null;
+  private venue: Venue;
+  private readonly cityFiles = new Map<CityId, Promise<CityFile>>();
+  /** The chosen city, and its course once built (route… are its parts). */
+  private city: CityStyle = cityById(HUB_ORDER[0])!;
+  private course: Course | null = null;
   private route!: Route;
   private dressing!: Dressing;
   private cues!: WorldCues;
   private judge!: Judge;
   private swingOfCue!: Map<number, number>;
-  private readonly courses = new Map<LevelId, Course>();
-  private readonly traffic: Traffic;
-  private readonly chunks: Mesh[] = [];
+  private readonly sunDir = HUB_SUN.clone();
   private readonly input = new Input();
   private readonly sfx = new Sfx();
   private readonly conductor: Conductor;
@@ -121,9 +164,32 @@ export class Game {
   /** Each arm's current aim, eased toward its next ring. */
   private readonly aim = [{ ...DEFAULT_AIM }, { ...DEFAULT_AIM }];
 
-  private state: State = "title";
+  private state: State = "hub";
   private stateT = 0;
-  private progress: Progress = { best: { 1: 0, 2: 0, 3: 0 }, cleared: 0 };
+  private best: Best = {};
+
+  // ---- rooftop
+  /** The portal the remote has picked (and the reticle rests on when nothing else aims). */
+  private hubFocus = 0;
+  private hovered = -1;
+  /** Arm aiming the reticle (k: 0 left, 1 right), and the arm shown up when nothing aims. */
+  private aimArm: 0 | 1 | null = null;
+  private shownSide: Side = 1;
+  /** Smoothed reticle direction, camera space. */
+  private readonly aimCam = camDir(0, 0);
+  private menuAimUntil = 0;
+  private mouse = { x: 0, y: 0, at: -1e9 };
+  /** Seconds the camera has followed the player without a break. */
+  private trackedFor = 0;
+  /** The last portal an arm held the reticle on, and when (performance.now()). */
+  private armHover = { i: -1, at: -1e9 };
+  /** A web shot at nothing on the rooftop: where it flies, and until when. */
+  private hubWeb: { to: Vector3; until: number } | null = null;
+  /** Arms that have shot a web this session: the tutorial skips them. */
+  private readonly armsShown = new Set<Side>();
+  private tutorialDone = false;
+  private warp: { portal: number; side: Side; from: Vector3; data: CityFile | null; failed: boolean; white: boolean } | null = null;
+  private travelToken = 0;
   /** motion: the camera (the game). keys: ?keys desk testing. auto: ?autoplay. */
   private mode: "motion" | "keys" | "auto" = "motion";
   private last = performance.now();
@@ -155,12 +221,14 @@ export class Game {
   private pipShown = false;
   private readonly prevPos = new Vector3();
   private readonly tmp = new Vector3();
+  private readonly tmp2 = new Vector3();
+  private readonly tmp3 = new Vector3();
+  private readonly tmpQ = new Quaternion();
 
   // ---- ready / calibration
   private steps: Step[] = [];
   private readyStep = 0;
   private readyDoneAt = -1;
-  private stanceT = 0;
   private readyView = "";
 
   // ---- camera picture for the mirror
@@ -194,21 +262,30 @@ export class Game {
 
     const material = createWorldMaterial();
     this.material = material;
-    this.city = buildCity(material, (type) => lib.geometries.get(type));
-    this.scene.add(this.city.group, this.sky.group);
-    this.city.group.traverse((o) => {
+    this.borrowed = new Set<object>([material, ...lib.geometries.values()]);
+    // The rooftop is the hand-built Downtown: the start roof with buildings all round to hang portals on.
+    const downtown = buildCity(material, (type) => lib.geometries.get(type));
+    const chunks: Mesh[] = [];
+    downtown.group.traverse((o) => {
       if (o.name.startsWith("chunk_")) {
         const m = o as Mesh;
         m.geometry.computeBoundingSphere();
-        this.chunks.push(m);
+        chunks.push(m);
       }
     });
-
-    this.loadProgress({});
-    const asked = levelById(Number(new URLSearchParams(location.search).get("level")));
-    this.useLevel(asked?.id ?? this.suggestedLevel());
-    this.traffic = new Traffic(lib, material, this.city.lanes);
-    this.scene.add(this.traffic.group, this.webLine.mesh, this.particles.mesh);
+    this.hub = new Hub(downtown.world, HUB_EYE);
+    const hubTraffic = new Traffic(lib, material, downtown.lanes);
+    const hubGroup = new Group();
+    hubGroup.add(downtown.group, hubTraffic.group, this.hub.group);
+    this.hubVenue = {
+      id: "hub", group: hubGroup, world: downtown.world, chunks, traffic: hubTraffic, backdrop: null, course: null, attribution: "",
+      dispose: () => undefined,
+    };
+    this.venue = this.hubVenue;
+    this.scene.add(hubGroup, this.sky.group, this.webLine.mesh, this.particles.mesh);
+    this.loadBest({});
+    const asked = cityById(new URLSearchParams(location.search).get("city") ?? "");
+    if (asked) this.city = asked;
 
     this.sun.castShadow = true;
     this.sun.shadow.camera.near = 1;
@@ -228,16 +305,14 @@ export class Game {
     this.applyQuality(this.quality.tier);
 
     if (this.debug) {
-      console.info("[city]", this.city.stats);
+      console.info("[downtown]", downtown.stats);
       (window as unknown as { game: Game }).game = this;
     }
     this.wirePlatform();
-    this.toTitle();
-    // Compile shaders before the first visible frame to avoid a hitch on the leap.
-    this.cues.prewarm(true);
+    this.wireMouse();
+    this.toHub();
     this.renderer.compile(this.scene, this.camera);
-    this.cues.prewarm(false);
-    if (this.autoplay) this.startRun();
+    if (this.autoplay) void this.travel(this.city);
   }
 
   // ------------------------------------------------------------------ platform
@@ -245,10 +320,16 @@ export class Game {
     const L = this.little;
     L.tool("start_run", (args) => {
       if (this.state === "play" || this.state === "resuming") return { ok: false, detail: "A run is already in progress." };
-      const lv = args.level === undefined ? this.level : levelById(Number(args.level));
-      if (!lv) return { ok: false, detail: `There is no level ${String(args.level)}: pick 1 to ${LEVELS.length}.` };
-      if (!this.unlocked(lv.id)) return { ok: false, detail: `${lv.name} is locked: clear ${LEVELS[lv.id - 2].name} first.` };
-      this.startRun(lv.id);
+      if (this.state === "warp") return { ok: false, detail: `Already on the way to ${this.city.name}.` };
+      const city = args.city === undefined ? this.city : cityById(String(args.city));
+      if (!city) return { ok: false, detail: `There is no city "${String(args.city)}": pick one of ${HUB_ORDER.join(", ")}.` };
+      // From the rooftop the hero shoots that portal, as the player would.
+      if (this.state === "hub") this.shootPortal(this.hub.indexOf(city.id), this.shownSide);
+      else void this.travel(city);
+    });
+    L.tool("go_rooftop", () => {
+      if (this.state === "hub" || this.state === "warp") return { ok: false, detail: "Already on the rooftop." };
+      this.goRooftop();
     });
     L.tool("pause_game", () => {
       if (this.state !== "play" && this.state !== "resuming") return { ok: false, detail: "Nothing to pause." };
@@ -258,7 +339,10 @@ export class Game {
       if (this.state !== "paused") return { ok: false, detail: "The game is not paused." };
       this.resume();
     });
-    L.tool("restart_run", () => this.startRun());
+    L.tool("restart_run", () => {
+      if (!this.course || this.state === "hub" || this.state === "warp") return { ok: false, detail: "No run to restart: pick a city first." };
+      this.startRun();
+    });
     L.tool("quit_game", () => this.quit());
     L.onPause(() => {
       if (this.state === "play" || this.state === "resuming") this.pause();
@@ -274,130 +358,411 @@ export class Game {
       if (this.state === "play" || this.state === "resuming") this.pause();
     });
     L.onEnter(({ params, state }) => {
-      this.loadProgress(state);
-      const asked = levelById(Number(params.level));
-      if (this.state === "title") {
-        this.useLevel(asked && this.unlocked(asked.id) ? asked.id : this.suggestedLevel());
-        this.toTitle();
+      this.loadBest(state);
+      const asked = cityById(String(params.city ?? ""));
+      if (asked && this.state === "hub") {
+        this.city = asked;
+        this.focusPortal(this.hub.indexOf(asked.id));
       }
-      if (params.start === true && this.state === "title") this.startRun();
+      if (params.start === true && this.state === "hub") this.shootPortal(this.hubFocus, this.shownSide);
     });
   }
 
-  // ------------------------------------------------------------------ levels
-  /** Best scores and how far the player has got, from the host's saved state and this browser's. */
-  private loadProgress(state: unknown) {
-    const s = (state ?? {}) as { progress?: Partial<Progress>; best?: unknown };
-    let local: Partial<Progress> | null = null;
+  private wireMouse() {
+    const c = this.renderer.domElement;
+    const at = (e: MouseEvent) => {
+      const r = c.getBoundingClientRect();
+      this.mouse.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+      this.mouse.y = -(((e.clientY - r.top) / r.height) * 2 - 1);
+      this.mouse.at = performance.now();
+    };
+    c.addEventListener("mousemove", at);
+    c.addEventListener("click", (e) => {
+      at(e);
+      this.sfx.unlock();
+      if (this.state === "hub") this.hubShot(this.mouse.x < 0 ? -1 : 1);
+    });
+  }
+
+  // ------------------------------------------------------------------ cities
+  /** Best score per city, from the host's saved state and this browser's. */
+  private loadBest(state: unknown) {
+    const s = (state ?? {}) as { best?: unknown };
+    let local: unknown = null;
     try {
-      local = JSON.parse(localStorage.getItem(PROGRESS_KEY) ?? "null") as Partial<Progress> | null;
+      local = JSON.parse(localStorage.getItem(BEST_KEY) ?? "null");
     } catch {
       local = null;
     }
-    const p = this.progress;
-    for (const src of [s.progress, local]) {
+    for (const src of [s.best, local]) {
       if (!src || typeof src !== "object") continue;
-      for (const lv of LEVELS) p.best[lv.id] = Math.max(p.best[lv.id], num(src.best?.[lv.id]));
-      p.cleared = Math.max(p.cleared, Math.min(LEVELS.length, num(src.cleared)));
-    }
-    // Before levels there was one song with everything in it: that's the full crawl, and it opens every level.
-    const legacy = Math.max(num(s.best), num(localStorage.getItem("cc.best")));
-    if (legacy > 0) {
-      p.best[3] = Math.max(p.best[3], legacy);
-      p.cleared = Math.max(p.cleared, 2);
+      for (const c of CITIES) this.best[c.id] = Math.max(this.best[c.id] ?? 0, num((src as Best)[c.id]));
     }
   }
 
-  private saveProgress() {
-    localStorage.setItem(PROGRESS_KEY, JSON.stringify(this.progress));
-    this.little.saveState({ progress: this.progress });
+  private saveBest() {
+    localStorage.setItem(BEST_KEY, JSON.stringify(this.best));
+    this.little.saveState({ best: this.best });
   }
 
-  private unlocked(id: LevelId) {
-    return id <= this.progress.cleared + 1 || this.debug || !!this.autoplay || this.input.keys;
-  }
-
-  /** The first level not yet cleared, or the last one. */
-  private suggestedLevel(): LevelId {
-    return LEVELS.find((lv) => lv.id > this.progress.cleared && this.unlocked(lv.id))?.id ?? LEVELS[LEVELS.length - 1].id;
-  }
-
-  /** Switch the city's course to a level's chart (each is built once, on first use). */
-  private useLevel(id: LevelId) {
-    const lv = levelById(id)!;
-    if (this.route && this.level === lv) return;
-    if (this.route) this.scene.remove(this.dressing.group, this.cues.group);
-    let c = this.courses.get(id);
-    if (!c) {
-      const route = new Route(this.city.world, buildChart(lv));
-      c = {
-        route,
-        judge: new Judge(route.cues),
-        dressing: new Dressing(this.lib, this.material, route),
-        cues: new WorldCues(route),
-        swingOfCue: new Map(route.swings.map((w, i) => [w.cue.id, i])),
-      };
-      this.courses.set(id, c);
-      if (this.debug) console.info(`[route] level ${id}`, JSON.stringify(route.describe()));
+  /** A city's map file, fetched once (the rooftop starts them all loading). */
+  private loadCity(id: CityId): Promise<CityFile> {
+    let p = this.cityFiles.get(id);
+    if (!p) {
+      p = fetch(`${import.meta.env.BASE_URL}cities/${id}.json`).then((r) => {
+        if (!r.ok) throw new Error(`cities/${id}.json: HTTP ${r.status}`);
+        return r.json() as Promise<CityFile>;
+      });
+      p.catch(() => this.cityFiles.delete(id));
+      this.cityFiles.set(id, p);
     }
-    this.level = lv;
-    ({ route: this.route, judge: this.judge, dressing: this.dressing, cues: this.cues, swingOfCue: this.swingOfCue } = c);
-    this.scene.add(c.dressing.group, c.cues.group);
+    return p;
   }
 
-  private levelItem(lv: Level): MenuItem {
-    const locked = !this.unlocked(lv.id);
-    const prev = LEVELS[lv.id - 2];
-    const best = this.progress.best[lv.id];
-    const sub = locked ? `Clear ${prev.name} to unlock` : best > 0 ? `${lv.blurb} · best ${best.toLocaleString("en-US")}` : lv.blurb;
-    return {
-      id: `level${lv.id}`,
-      label: `Level ${lv.id}: ${lv.name}`,
-      html: `<span class="lvl-name"><i>${lv.id}</i>${lv.name}</span><small>${sub}</small>`,
-      locked,
-      action: "start_run",
-      onSelect: () => {
-        if (!locked) this.startRun(lv.id);
-        else {
-          this.sfx.ui("back");
-          this.hud.callout(`CLEAR ${prev.name.toUpperCase()} FIRST`, "info");
-        }
-      },
+  /** Build a city from its map file: streets, buildings, traffic, horizon, and the song's route through it. */
+  private buildCityVenue(style: CityStyle, data: CityFile): Venue {
+    const rc = buildRealCity(data, style, this.material, this.lib);
+    const route = new Route(rc.world, buildChart(), rc.course);
+    const course: Course = {
+      route,
+      judge: new Judge(route.cues),
+      dressing: new Dressing(this.lib, this.material, route),
+      cues: new WorldCues(route),
+      swingOfCue: new Map(route.swings.map((w, i) => [w.cue.id, i])),
     };
+    const traffic = new Traffic(this.lib, this.material, rc.lanes, style.traffic, 0.24);
+    const backdrop = new Backdrop(style, new Color(style.sky.horizon));
+    const group = new Group();
+    group.add(rc.group, traffic.group, backdrop.group, course.dressing.group, course.cues.group);
+    if (this.debug) console.info(`[city] ${style.id}`, rc.stats, JSON.stringify(route.describe()));
+    return {
+      id: style.id, group, world: rc.world, chunks: rc.chunks, traffic, backdrop, course, attribution: data.attribution,
+      dispose: () => disposeTree(group, this.borrowed),
+    };
+  }
+
+  /** Put a venue on stage, with its sky, fog and sun. */
+  private useVenue(v: Venue) {
+    if (this.venue !== v) {
+      this.scene.remove(this.venue.group);
+      this.scene.add(v.group);
+      this.venue = v;
+    }
+    const style = v.id === "hub" ? null : cityById(v.id)!;
+    const top = style ? new Color(style.sky.top) : pal("sky_top");
+    const horizon = style ? new Color(style.sky.horizon) : pal("sky_horizon");
+    this.sky.setColors(top, horizon);
+    this.sky.shoreVisible = !style;
+    this.fog.color.copy(horizon);
+    (this.scene.background as Color).copy(horizon);
+    this.sun.color.copy(style ? new Color(style.sky.sun) : pal("sun"));
+    this.sun.intensity = style?.sky.sunIntensity ?? 1.8;
+    this.hemi.color.copy(style ? new Color(style.sky.hemiSky) : pal("hemi_sky"));
+    this.hemi.groundColor.copy(style ? new Color(style.sky.hemiGround) : pal("hemi_ground"));
+    if (style) this.sunDir.set(...style.sky.sunDir).normalize();
+    else this.sunDir.copy(HUB_SUN);
+    this.hud.setCredit(v.attribution || null);
+  }
+
+  /** Into a city (built now if it isn't the one kept), ready to run. */
+  private enterCity(style: CityStyle, data: CityFile) {
+    if (this.cityVenue?.id !== style.id) {
+      const old = this.cityVenue;
+      if (old) {
+        if (this.venue === old) this.useVenue(this.hubVenue);
+        old.dispose();
+      }
+      this.cityVenue = this.buildCityVenue(style, data);
+    }
+    const v = this.cityVenue!;
+    this.city = style;
+    this.course = v.course;
+    ({ route: this.route, judge: this.judge, dressing: this.dressing, cues: this.cues, swingOfCue: this.swingOfCue } = v.course!);
+    this.useVenue(v);
+    // Compile shaders now, behind the fade, rather than on the leap.
+    this.cues.prewarm(true);
+    this.renderer.compile(this.scene, this.camera);
+    this.cues.prewarm(false);
+    this.startRun();
+  }
+
+  /** Straight to a city from a menu: white out, load, build, run. */
+  private async travel(style: CityStyle) {
+    const token = ++this.travelToken;
+    this.conductor.stop();
+    this.hud.close();
+    this.hud.fade(1, 300, "#ffffff");
+    try {
+      const [data] = await Promise.all([this.loadCity(style.id), new Promise((r) => setTimeout(r, 320))]);
+      if (token !== this.travelToken) return;
+      this.enterCity(style, data);
+    } catch (err) {
+      console.error(err);
+      if (token !== this.travelToken) return;
+      this.toHub();
+      this.hud.callout(`COULDN'T LOAD ${style.name.toUpperCase()}`, "bad");
+    }
+    this.hud.fade(0, 450);
+  }
+
+  /** Back up to the rooftop to pick another city. */
+  private goRooftop() {
+    const token = ++this.travelToken;
+    this.conductor.stop();
+    this.hud.close();
+    this.hud.fade(1, 260);
+    setTimeout(() => {
+      if (token !== this.travelToken) return;
+      this.toHub();
+      this.hud.fade(0, 400);
+    }, 280);
   }
 
   private setTools(names: string[]) {
     this.little.setActiveTools(names);
   }
 
-  // ------------------------------------------------------------------ states
-  private toTitle() {
-    this.state = "title";
+  // ------------------------------------------------------------------ rooftop
+  /** The rooftop: portals to every city on the buildings around, an arm up to aim at them. */
+  private toHub() {
+    this.travelToken++;
+    this.state = "hub";
     this.stateT = 0;
+    this.warp = null;
     this.conductor.stop();
     this.resetRun();
-    this.placeRider(0, 0);
+    this.useVenue(this.hubVenue);
+    this.placeHubRider();
+    this.rig.perchPitch = HUB_PITCH;
     this.rig.snap(this.rider);
-    this.rig.idleSway = 0.35;
+    this.rig.pitch = HUB_PITCH;
+    this.rig.idleSway = 0;
     this.hud.showRunHud(false);
     this.hud.hideGuide();
     this.hud.setHint(null);
     this.hud.setPrompt(null);
     this.hud.setCenter(null);
     this.closeCamera();
-    this.motion.close();
-    const items: MenuItem[] = [
-      ...LEVELS.map((lv) => this.levelItem(lv)),
-      { id: "quit", label: "Quit", action: "quit_game", onSelect: () => this.quit() },
-    ];
-    const note = this.input.keys
-      ? "Desk test: <kbd>Q</kbd><kbd>E</kbd> webs, <kbd>A</kbd><kbd>D</kbd> leans"
-      : this.little.can("sense.motion") ? "" : "City Crawlers needs the TV camera, which isn't available here.";
-    this.hud.showTitle(items, note, this.level.id - 1);
+    // The rooftop is aimed with the body, so the camera watches from here on (autoplay plays itself).
+    if (!this.autoplay) this.motion.start();
+    this.resetAim();
+    this.aimArm = null;
+    this.hubFocus = Math.max(0, this.hub.indexOf(this.city.id));
+    this.aimCam.copy(this.hubDirOf(this.hubFocus));
+    this.showHubMenu();
     this.setTools(["start_run", "quit_game"]);
+    for (const id of HUB_ORDER) this.loadCity(id).catch(() => undefined);
   }
 
+  private showHubMenu() {
+    const items: MenuItem[] = this.hub.portals.map((p, i) => {
+      const best = this.best[p.city.id] ?? 0;
+      const sub = [p.city.local ?? p.city.area, best > 0 ? `best ${best.toLocaleString("en-US")}` : ""].filter(Boolean).join(" · ");
+      return {
+        id: p.city.id,
+        label: p.city.name,
+        html: `<span class="city-name"><i style="background:${p.city.color}"></i>${p.city.name}</span><small>${sub}</small>`,
+        action: "start_run",
+        onSelect: () => this.shootPortal(i, this.shownSide),
+      };
+    });
+    this.hud.showHub(items, this.hubFocus, "Cities built from OpenStreetMap data © OpenStreetMap contributors, via Overture Maps");
+  }
+
+  private placeHubRider() {
+    const rd = this.rider;
+    rd.pos.set(START.x, START.y + 0.9, START.z);
+    rd.vel.set(0, 0, 0);
+    rd.speed = 0;
+    rd.heading.set(0, 0, -1);
+    rd.steer = 0;
+    rd.state = "perched";
+  }
+
+  /** Camera-space direction to a portal from the rooftop view. */
+  private hubDirOf(i: number) {
+    this.camera.updateMatrixWorld();
+    return this.camera.worldToLocal(this.tmp.copy(this.hub.portals[i].center)).normalize();
+  }
+
+  private focusPortal(i: number) {
+    if (i < 0) return;
+    this.hubFocus = i;
+    this.hud.menu.setFocus(i);
+  }
+
+  /**
+   * Aim from, in order: an arm the player holds up, the remote's last pick (for a moment),
+   * the mouse (desk testing), else the remote's pick.
+   */
+  private updateHub(dt: number, now: number) {
+    const m = this.motion;
+    const live = m.tracking;
+    const raised = ([0, 1] as const).filter((k) => live && armRaised(m.arms[k]));
+    if (this.aimArm === null || !raised.includes(this.aimArm)) {
+      this.aimArm = raised.length ? raised.reduce((a, b) => (m.arms[b].reach > m.arms[a].reach ? b : a)) : null;
+    }
+    let goal: Vector3;
+    let source: "arm" | "menu" | "mouse";
+    if (this.aimArm !== null && now / 1000 > this.menuAimUntil) {
+      const side: Side = this.aimArm === 0 ? -1 : 1;
+      const { yaw, el } = armAim(side, m.arms[this.aimArm].angle);
+      goal = camDir(yaw, el, this.tmp2);
+      source = "arm";
+      this.shownSide = side;
+    } else if (now - this.mouse.at < MOUSE_AIM_HOLD * 1000 && now / 1000 > this.menuAimUntil) {
+      goal = this.tmp2.set(this.mouse.x, this.mouse.y, 0.5).unproject(this.camera).sub(this.camera.position);
+      goal.applyQuaternion(this.tmpQ.copy(this.camera.quaternion).invert()).normalize();
+      source = "mouse";
+      this.shownSide = this.mouse.x < 0 ? -1 : 1;
+    } else {
+      goal = this.tmp2.copy(this.hubDirOf(this.hubFocus));
+      source = "menu";
+    }
+    this.aimCam.lerp(goal, 1 - Math.exp(-(source === "arm" ? 14 : 20) * dt)).normalize();
+    const aimWorld = this.tmp3.copy(this.aimCam).applyQuaternion(this.camera.quaternion);
+    const hovered = this.hub.pick(this.camera.position, aimWorld);
+    if (hovered !== this.hovered && hovered >= 0) this.sfx.ui("move");
+    this.hovered = hovered;
+    this.trackedFor = live ? this.trackedFor + dt : 0;
+    if (source === "arm" && hovered >= 0) this.armHover = { i: hovered, at: now };
+    if (source !== "menu" && hovered >= 0 && hovered !== this.hubFocus) this.focusPortal(hovered);
+    this.hub.update(dt, hovered);
+    this.arms.setHub(this.shownSide, this.aimCam);
+    this.showReticle(aimWorld, hovered);
+
+    for (const e of m.drain()) if (e.type === "shoot") this.hubShot(e.side, true);
+    if (this.hubWeb && now > this.hubWeb.until) this.hubWeb = null;
+    if (!this.hubWeb && !this.web) this.webLine.hide();
+
+    let prompt: string;
+    const hoverName = hovered >= 0 ? this.hub.portals[hovered].city.name : "";
+    if (source === "arm") prompt = hovered >= 0 ? `Punch to shoot a web at <b>${hoverName}</b>!` : "Aim at a portal";
+    else if (live) prompt = "Raise an arm to aim at a city, then punch to shoot a web";
+    else if (m.available) prompt = "Step in front of the camera, then raise an arm to aim";
+    else prompt = `Pick a city and press <b>OK</b> to shoot a web at it`;
+    this.hud.setHubPrompt(prompt);
+    this.hud.showPip(m.available);
+    if (m.available) this.hud.pip.draw(m, NO_FOCUS, now);
+  }
+
+  /** The reticle on screen, where the aim meets the portal wall. */
+  private showReticle(aimWorld: Vector3, hovered: number) {
+    const p = this.tmp.copy(this.camera.position).addScaledVector(aimWorld, 40).project(this.camera);
+    if (p.z > 1) {
+      this.hud.setReticle(null);
+      return;
+    }
+    this.hud.setReticle({ x: (p.x + 1) * 960, y: (1 - p.y) * 540 }, hovered >= 0 ? this.hub.portals[hovered].city.color : null);
+  }
+
+  /**
+   * A web from the rooftop. With a body shot the arm's own direction decides; otherwise
+   * the reticle does. On a portal it's the trip there; on nothing it just flies.
+   */
+  private hubShot(side: Side, body = false) {
+    if (this.state !== "hub") return;
+    // Someone just stepping in, or passing by, mustn't pick a city by accident.
+    if (body && this.trackedFor < HUB_SETTLE) return;
+    this.armsShown.add(side);
+    let dir = this.tmp3.copy(this.aimCam);
+    const k = side < 0 ? 0 : 1;
+    if (body) {
+      const { yaw, el } = armAim(side, this.motion.arms[k].angle);
+      dir = camDir(yaw, el, this.tmp3);
+      this.menuAimUntil = 0;
+    }
+    this.shownSide = side;
+    const world = dir.applyQuaternion(this.camera.quaternion);
+    let i = this.hub.pick(this.camera.position, world);
+    // A body shot only takes a portal the reticle was already resting on.
+    if (body && !(i >= 0 && this.armHover.i === i && performance.now() - this.armHover.at < AIMED_WITHIN * 1000)) i = -1;
+    if (i >= 0) {
+      this.shootPortal(i, side);
+      return;
+    }
+    this.sfx.thwip();
+    this.arms.puff(side);
+    this.arms.flick(side);
+    this.webLine.shoot(true);
+    this.hubWeb = { to: this.camera.position.clone().addScaledVector(world, 60), until: performance.now() + 260 };
+  }
+
+  /** Shoot the portal and go: the web, the zip toward it, a white-out, then the city. */
+  private shootPortal(i: number, side: Side) {
+    if (this.state !== "hub" || i < 0) return;
+    const p = this.hub.portals[i];
+    this.sfx.unlock();
+    this.sfx.thwip();
+    this.sfx.attach();
+    this.arms.puff(side);
+    this.arms.flick(side);
+    this.shownSide = side;
+    this.focusPortal(i);
+    this.aimCam.copy(this.hubDirOf(i));
+    this.arms.setHub(side, this.aimCam);
+    this.city = p.city;
+    this.hud.close();
+    this.hud.setReticle(null);
+    this.hud.showPip(false);
+    this.hubWeb = { to: p.center.clone(), until: Infinity };
+    this.webLine.shoot();
+    this.rig.addKick(0.8);
+    this.state = "warp";
+    this.stateT = 0;
+    this.setTools([]);
+    const warp = { portal: i, side, from: this.rider.pos.clone(), data: null as CityFile | null, failed: false, white: false };
+    this.warp = warp;
+    this.loadCity(p.city.id).then(
+      (d) => (warp.data = d),
+      (err) => {
+        console.error(err);
+        warp.failed = true;
+      },
+    );
+  }
+
+  private updateWarp(dt: number) {
+    const w = this.warp!;
+    const p = this.hub.portals[w.portal];
+    const t = this.stateT;
+    this.hub.update(dt, w.portal, w.portal);
+    // Zip along the web, accelerating, and turn to look straight through the portal.
+    const u = clamp((t - WARP_ZIP_AT) / WARP_ZIP_FOR, 0, 1);
+    const to = this.tmp.subVectors(p.center, w.from);
+    const rd = this.rider;
+    this.prevPos.copy(rd.pos);
+    rd.pos.copy(w.from).addScaledVector(to, 0.92 * u * u * u);
+    if (dt > 0) rd.vel.subVectors(rd.pos, this.prevPos).divideScalar(dt);
+    rd.speed = rd.vel.length();
+    rd.heading.set(to.x, 0, to.z).normalize();
+    this.rig.perchPitch = Math.atan2(to.y, Math.hypot(to.x, to.z));
+    this.arms.setHub(w.side, this.hubDirOf(w.portal));
+    if (t > WARP_WHITE_AT && !w.white) {
+      w.white = true;
+      this.hud.fade(1, 320, "#ffffff");
+      this.sfx.whoosh();
+    }
+    if (w.failed) {
+      this.toHub();
+      this.hud.fade(0, 300);
+      this.hud.callout(`COULDN'T LOAD ${p.city.name.toUpperCase()}`, "bad");
+      return;
+    }
+    if (t > WARP_ARRIVE_AT && w.data) {
+      this.warp = null;
+      this.hubWeb = null;
+      this.webLine.hide();
+      this.enterCity(p.city, w.data);
+      this.hud.fade(0, 500);
+    }
+  }
+
+  // ------------------------------------------------------------------ states
   private resetRun() {
+    this.webLine.hide();
+    this.setPip(false);
+    if (!this.course) return;
     this.judge.reset();
     this.dressing.reset();
     this.cues.reset();
@@ -419,8 +784,6 @@ export class Game {
     this.coins = 0;
     this.lostFor = 0;
     this.pausedForTracking = false;
-    this.webLine.hide();
-    this.setPip(false);
   }
 
   private setPip(on: boolean) {
@@ -429,14 +792,22 @@ export class Game {
     this.hud.showPip(on);
   }
 
-  /** Play → get ready: the camera mirror, finding your spot and a quick tutorial of this level's moves, then the song. */
-  private startRun(level: LevelId = this.level.id) {
+  /**
+   * Get ready on the city's start roof: the camera mirror, finding your spot and, the
+   * first time, a quick go at the moves the rooftop didn't already teach. Then the song.
+   */
+  private startRun() {
+    if (!this.course) return;
+    this.travelToken++;
     this.sfx.unlock();
     this.hud.close();
+    this.hud.setReticle(null);
     this.conductor.stop();
-    this.useLevel(level);
     this.resetRun();
+    this.arms.setHub(null);
+    this.hubWeb = null;
     this.placeRider(0, 0);
+    this.rig.perchPitch = -0.12;
     this.rig.snap(this.rider);
     this.rig.idleSway = 0;
     this.hud.showRunHud(false);
@@ -448,9 +819,14 @@ export class Game {
     this.stateT = 0;
     this.readyStep = 0;
     this.readyDoneAt = -1;
-    this.stanceT = 0;
-    this.steps = STEPS.filter((s) => stepFor(this.level, s.id)).map((s) => ({ ...s, done: false }));
-    this.setTools(["start_run", "quit_game"]);
+    const ids: StepId[] = ["frame"];
+    if (!this.tutorialDone) {
+      if (!this.armsShown.has(1)) ids.push("shootR");
+      if (!this.armsShown.has(-1)) ids.push("shootL");
+      ids.push("leanL", "leanR");
+    }
+    this.steps = ids.map((id) => ({ id, ...STEPS[id], done: false }));
+    this.setTools(["start_run", "go_rooftop", "quit_game"]);
     if (this.autoplay) {
       this.beginPlay();
       return;
@@ -474,8 +850,8 @@ export class Game {
         side: `<div class="guide-msg"><b>City Crawlers is played with your body.</b>
           <p>The TV camera watches your arms and leans. Allow the camera for City Crawlers, then press OK to try again.</p>${why}</div>`,
         footer: this.input.keys
-          ? "<kbd>OK</kbd> play with the keyboard &nbsp; <kbd>BACK</kbd> title"
-          : "<kbd>OK</kbd> try again &nbsp; <kbd>BACK</kbd> title",
+          ? "<kbd>OK</kbd> play with the keyboard &nbsp; <kbd>BACK</kbd> rooftop"
+          : "<kbd>OK</kbd> try again &nbsp; <kbd>BACK</kbd> rooftop",
         data: { camera: "unavailable", reason: this.motion.reason },
       });
       return;
@@ -484,19 +860,19 @@ export class Game {
     const all = this.readyStep >= this.steps.length;
     const now = all
       ? `<div class="step-now done"><i class="step-fig">${figureSvg("frame")}</i><div><b>You're ready!</b><p>Here comes the song.</p></div></div>`
-      : `<div class="step-now"><i class="step-fig">${figureSvg(STEP_FIGURE[cur.id])}</i><div><b>${cur.label}</b><p>${cur.hint}</p></div></div>`;
+      : `<div class="step-now"><i class="step-fig">${figureSvg(cur.id)}</i><div><b>${cur.label}</b><p>${cur.hint}</p></div></div>`;
     const list = this.steps
       .map((s, i) => `<li class="${s.done ? "done" : i === this.readyStep ? "cur" : ""}">${s.label}</li>`)
       .join("");
     this.hud.showGuide({
-      title: `LEVEL ${this.level.id}: ${this.level.name.toUpperCase()}`,
+      title: `${this.city.name.toUpperCase()} · ${this.city.area.toUpperCase()}`,
       side: `${now}<ol class="steps">${list}</ol>`,
-      footer: "<kbd>OK</kbd> skip the tutorial &nbsp; <kbd>BACK</kbd> title",
+      footer: `<kbd>OK</kbd> ${this.steps.length > 1 ? "skip the tutorial" : "start"} &nbsp; <kbd>BACK</kbd> rooftop`,
       data: { steps: this.steps.map((s) => ({ step: s.label.replace(/<[^>]+>/g, ""), done: s.done })) },
     });
   }
 
-  private updateReady(dt: number) {
+  private updateReady() {
     const m = this.motion;
     const events = m.drain();
     // Re-render when the camera comes up or goes away.
@@ -515,10 +891,6 @@ export class Game {
         m.calibrateLean();
         this.advanceReady();
       }
-    } else if (id === "stance") {
-      const loaded = m.arms.every((a) => a.ok && a.armed && a.reach < 0.75);
-      this.stanceT = loaded ? this.stanceT + dt : 0;
-      if (this.stanceT > 0.3) this.advanceReady();
     } else {
       for (const e of events) {
         const ok =
@@ -538,7 +910,10 @@ export class Game {
     this.steps[this.readyStep].done = true;
     this.sfx.tick(this.readyStep);
     this.readyStep++;
-    if (this.readyStep >= this.steps.length) this.readyDoneAt = this.stateT;
+    if (this.readyStep >= this.steps.length) {
+      this.readyDoneAt = this.stateT;
+      this.tutorialDone = true;
+    }
     this.renderReady();
   }
 
@@ -572,25 +947,19 @@ export class Game {
     this.stateT = 0;
     this.hud.showRunHud(true);
     this.hud.setStats(0, 0, 1, 1);
-    this.hud.setHint(this.levelHint());
+    this.hud.setHint(this.runHint());
     this.resetAim();
     this.conductor.start(-0.3);
     this.setTools(["pause_game", "restart_run", "quit_game"]);
-    this.little.emit("run_started", { level: this.level.id, input: this.mode, cues: this.judge.rts.filter((rt) => !rt.cue.auto).length });
+    this.little.emit("run_started", { city: this.city.id, input: this.mode, cues: this.judge.rts.filter((rt) => !rt.cue.auto).length });
   }
 
-  /** What to do in this level, shown over the opening bars. */
-  private levelHint() {
-    const lv = this.level;
-    const name = `<span>Level ${lv.id}: <b>${lv.name}</b></span>`;
-    if (this.mode === "keys") {
-      return name + (lv.shoots ? `<span><kbd>Q</kbd><kbd>E</kbd>webs</span>` : "") + (lv.leans ? `<span><kbd>A</kbd><kbd>D</kbd>leans</span>` : "");
-    }
+  /** What to do, shown over the opening bars. */
+  private runHint() {
+    const name = `<span><b>${this.city.name}</b></span>`;
+    if (this.mode === "keys") return `${name}<span><kbd>Q</kbd><kbd>E</kbd>webs</span><span><kbd>A</kbd><kbd>D</kbd>leans</span>`;
     if (this.mode !== "motion") return null;
-    const shoot = `<span>Punch at each ring <b>when its circle locks on</b>: <b class="cl">blue</b> left, <b class="cr">pink</b> right</span>`;
-    const lean = `<span>Lean where the <b class="co">arrows</b> point</span>`;
-    if (!lv.shoots) return `${name}<span>Your webs fire themselves</span>${lean}`;
-    return name + shoot + (lv.leans ? lean : "");
+    return `${name}<span>Punch at each ring <b>when its circle locks on</b></span><span>Lean where the <b class="co">arrows</b> point</span>`;
   }
 
   private pause(forTracking = false) {
@@ -603,7 +972,7 @@ export class Game {
     this.hud.setCenter(null);
     if (forTracking) this.showLostGuide();
     else this.showPauseMenu();
-    this.setTools(["resume_game", "restart_run", "quit_game"]);
+    this.setTools(["resume_game", "restart_run", "go_rooftop", "quit_game"]);
   }
 
   private showPauseMenu() {
@@ -612,6 +981,7 @@ export class Game {
     this.hud.showPause([
       { id: "resume", label: "Resume", action: "resume_game", onSelect: () => this.resume() },
       { id: "restart", label: "Restart", action: "restart_run", onSelect: () => this.startRun() },
+      { id: "rooftop", label: "Rooftop", action: "go_rooftop", onSelect: () => this.goRooftop() },
       { id: "quit", label: "Quit", action: "quit_game", onSelect: () => this.quit() },
     ]);
   }
@@ -668,7 +1038,7 @@ export class Game {
     this.closeCamera();
     this.motion.close();
     this.little.exit();
-    if (this.little.isStub) this.toTitle();
+    if (this.little.isStub) this.toHub();
   }
 
   // ------------------------------------------------------------------ camera picture
@@ -705,15 +1075,12 @@ export class Game {
     const grade = acc >= 0.95 ? "S" : acc >= 0.85 ? "A" : acc >= 0.7 ? "B" : acc >= 0.55 ? "C" : "D";
     const stars = acc >= 0.85 ? 3 : acc >= 0.65 ? 2 : 1;
     const final = j.score;
-    const lv = this.level;
-    const next = levelById(lv.id + 1);
-    const p = this.progress;
-    const cleared = acc >= CLEAR_ACCURACY;
-    const opened = cleared && !!next && !this.unlocked(next.id);
-    const newBest = final > p.best[lv.id];
-    if (newBest) p.best[lv.id] = final;
-    if (cleared) p.cleared = Math.max(p.cleared, lv.id);
-    if (newBest || cleared) this.saveProgress();
+    const city = this.city;
+    const newBest = final > (this.best[city.id] ?? 0);
+    if (newBest) {
+      this.best[city.id] = final;
+      this.saveBest();
+    }
     this.hud.showRunHud(false);
     this.setPip(false);
     this.hud.setHint(null);
@@ -725,27 +1092,19 @@ export class Game {
       ["Max combo", n(j.maxCombo)],
       ["Perfect · Great · Good", `${j.counts.perfect} · ${j.counts.great} · ${j.counts.good}`],
       ["Missed", n(j.counts.miss)],
+      ["Dodge coins", n(this.coins)],
     ];
-    if (lv.leans) rows.push(["Dodge coins", n(this.coins)]);
     const items: MenuItem[] = [
-      { id: "again", label: "Play again", action: "start_run", onSelect: () => this.startRun() },
-      { id: "title", label: "Title", action: "quit_game", onSelect: () => this.toTitle() },
+      { id: "again", label: "Play again", action: "restart_run", onSelect: () => this.startRun() },
+      { id: "rooftop", label: "Rooftop", action: "go_rooftop", onSelect: () => this.goRooftop() },
     ];
-    if (next && this.unlocked(next.id)) {
-      items.unshift({ id: "next", label: `Next: ${next.name}`, action: "start_run", onSelect: () => this.startRun(next.id) });
-    }
-    const pct = Math.round(CLEAR_ACCURACY * 100);
     this.hud.showResults(
-      {
-        heading: cleared ? `${lv.name.toUpperCase()} CLEARED` : "ROUTE COMPLETE",
-        score: final, best: p.best[lv.id], newBest, stars, grade, rows,
-        note: opened ? `${next!.name} unlocked!` : !cleared && next && !this.unlocked(next.id) ? `Hit ${pct}% accuracy to unlock ${next.name}` : undefined,
-      },
+      { heading: `${city.name.toUpperCase()} COMPLETE`, score: final, best: this.best[city.id] ?? final, newBest, stars, grade, rows },
       items,
     );
-    this.setTools(["start_run", "quit_game"]);
+    this.setTools(["start_run", "restart_run", "go_rooftop", "quit_game"]);
     this.little.emit("run_finished", {
-      level: lv.id, cleared, score: final, grade, stars, accuracy: Math.round(acc * 1000) / 10, maxCombo: j.maxCombo, ...j.counts,
+      city: city.id, score: final, grade, stars, accuracy: Math.round(acc * 1000) / 10, maxCombo: j.maxCombo, ...j.counts,
       input: this.mode,
     });
   }
@@ -762,24 +1121,28 @@ export class Game {
       }
       if (this.state === "ready") {
         if (ev.action === "select") this.readyOk();
-        else if (ev.action === "back") this.toTitle();
+        else if (ev.action === "back") this.goRooftop();
       } else if ((this.state === "play" || this.state === "resuming") && ev.action === "back") {
         this.pause();
       } else if (this.state === "paused" && ev.action === "back") {
         this.showPauseMenu();
       }
     }
+    if (this.state === "hub") {
+      // Desk testing: Q / E shoot the left / right arm at whatever the reticle is on.
+      for (const p of presses) if (p.kind === "hand") this.hubShot(p.side);
+      return;
+    }
     if (this.state !== "play") {
       // Gestures between runs are not inputs (the ready screen reads its own).
       if (this.state !== "ready") this.motion.drain();
       return;
     }
-    // In the dodge level the hero fires its own webs: arm punches aren't inputs.
-    if (this.mode === "keys") for (const p of presses) if (p.kind === "lean" || this.level.shoots) this.onPress(p.kind, p.side, p.time);
+    if (this.mode === "keys") for (const p of presses) this.onPress(p.kind, p.side, p.time);
     for (const e of this.motion.drain()) {
       if (this.mode !== "motion") continue;
       if (e.type === "shoot") {
-        if (this.level.shoots) this.onPress("hand", e.side, e.t);
+        this.onPress("hand", e.side, e.t);
       } else if (e.type === "lean") {
         const hit = this.onPress("lean", e.side, e.t);
         this.leanHeld = hit ? null : { side: e.side, since: this.conductor.songTime(e.t) };
@@ -788,20 +1151,23 @@ export class Game {
   }
 
   private menuInput(a: Action) {
-    if (a === "up" || a === "left") {
-      this.hud.menu.move(-1);
+    const step = a === "up" || a === "left" ? -1 : a === "down" || a === "right" ? 1 : 0;
+    if (step) {
+      this.hud.menu.move(step);
       this.sfx.ui("move");
-    } else if (a === "down" || a === "right") {
-      this.hud.menu.move(1);
-      this.sfx.ui("move");
+      if (this.state === "hub") {
+        // The remote moves the reticle to the next portal over.
+        this.hubFocus = (this.hubFocus + step + this.hub.portals.length) % this.hub.portals.length;
+        this.menuAimUntil = performance.now() / 1000 + MENU_AIM_HOLD;
+      }
     } else if (a === "select") {
       this.sfx.ui("select");
       this.hud.menu.activate();
     } else if (a === "back") {
       this.sfx.ui("back");
       if (this.state === "paused") this.resume();
-      else if (this.state === "results") this.toTitle();
-      else if (this.state === "title") this.quit();
+      else if (this.state === "results") this.goRooftop();
+      else if (this.state === "hub") this.quit();
     }
   }
 
@@ -944,28 +1310,33 @@ export class Game {
     this.handleInput();
     this.stateT += dt;
 
-    if (this.state === "ready") this.updateReady(dt);
+    if (this.state === "hub") this.updateHub(dt, now);
+    else if (this.state === "warp") this.updateWarp(dt);
+    else if (this.state === "ready") this.updateReady();
     else if (this.state === "resuming") this.updateResuming();
     else if (this.state === "paused") this.updatePaused(dt);
     if (this.state === "play") this.updatePlay(dt, now);
     else if (this.state === "results") this.updateRide(dt, this.conductor.beat(now));
-    else if (this.state === "title" || this.state === "ready") this.placeRider(0, dt);
+    else if (this.state === "ready") this.placeRider(0, dt);
 
     const frozen = this.state === "paused" || this.state === "resuming";
     const simDt = frozen ? 0 : dt;
     if (!frozen) {
-      this.traffic.update(dt);
-      this.dressing.update(dt);
+      this.venue.traffic.update(dt);
+      if (this.venue.course) this.dressing.update(dt);
       this.particles.update(dt);
     }
     this.rig.update(simDt, this.rider);
     this.sky.update(dt, this.camera.position);
+    this.venue.backdrop?.update(this.camera.position);
     this.updateShadowFrustum();
     this.updateChunkVisibility();
     this.driveArmsFromBody();
-    this.arms.update(frozen ? dt : simDt, this.rider, this.camera, SUN_DIR);
-    this.speedLines.update(simDt, this.rider.state === "perched" ? 0 : this.rider.speed * 1.6);
-    if (this.web) this.webLine.update(dt, this.arms.webOrigin(this.camera, this.tmp), this.rider.anchor, this.camera);
+    this.arms.update(frozen ? dt : simDt, this.rider, this.camera, this.sunDir);
+    const zipping = this.state === "warp";
+    this.speedLines.update(simDt, this.rider.state === "perched" && !zipping ? 0 : this.rider.speed * 1.6);
+    const webTo = this.web ? this.rider.anchor : this.hubWeb?.to;
+    if (webTo) this.webLine.update(dt, this.arms.webOrigin(this.camera, this.tmp), webTo, this.camera);
 
     const beat = this.conductor.beat(now);
     if (this.state === "play" || frozen) this.cues.update(simDt, beat, this.judge.rts, this.camera, this.web?.swing ?? -1);
@@ -1003,8 +1374,8 @@ export class Game {
     this.debugT -= dt;
     if (this.debugT > 0) return;
     this.debugT = 0.2;
-    const j = this.judge;
-    const recent = j.rts.filter((r) => r.state === "hit" && r.offset !== undefined).slice(-6);
+    // No judge until the first city is entered.
+    const recent = this.course ? this.judge.rts.filter((r) => r.state === "hit" && r.offset !== undefined).slice(-6) : [];
     const offs = recent.map((r) => `${r.cue.kind === "hand" ? "W" : "L"}${Math.round(r.offset! * 1000)}`).join(" ");
     this.hud.setDebug(
       `${this.motion.debugText()}\n${this.state} mode ${this.mode} beat ${beat.toFixed(2)} audio ${this.conductor.audible ? "on" : "off"}\n` +
@@ -1094,9 +1465,10 @@ export class Game {
       return;
     }
 
-    const sec = sectionAt(beat);
     if (beat > FIRST_CUE_BEAT + 8) this.hud.setHint(null);
-    this.hud.setProgress((beat - FIRST_CUE_BEAT) / (FINISH_BEAT - FIRST_CUE_BEAT), sec.name);
+    // The street the hero is over, by its real name.
+    const where = this.r <= LEAP_BEAT ? this.city.area : this.route.streetAt(this.r);
+    this.hud.setProgress((beat - FIRST_CUE_BEAT) / (FINISH_BEAT - FIRST_CUE_BEAT), where);
     this.hud.setStats(this.judge.score, this.judge.combo, this.judge.multiplier, this.judge.accuracy);
     this.sfx.setWind(clamp((this.rider.speed - 12) / 18, 0, 1) * 0.6);
 
@@ -1287,21 +1659,21 @@ export class Game {
     center.y = 0;
     const cam = this.sun.shadow.camera;
     const texel = (cam.right - cam.left) / this.sun.shadow.mapSize.x;
-    const lx = new Vector3().crossVectors(new Vector3(0, 1, 0), SUN_DIR).normalize();
-    const ly = new Vector3().crossVectors(SUN_DIR, lx);
+    const lx = new Vector3().crossVectors(new Vector3(0, 1, 0), this.sunDir).normalize();
+    const ly = new Vector3().crossVectors(this.sunDir, lx);
     const u = Math.round(center.dot(lx) / texel) * texel;
     const v = Math.round(center.dot(ly) / texel) * texel;
-    const w = center.dot(SUN_DIR);
-    center.set(0, 0, 0).addScaledVector(lx, u).addScaledVector(ly, v).addScaledVector(SUN_DIR, w);
+    const w = center.dot(this.sunDir);
+    center.set(0, 0, 0).addScaledVector(lx, u).addScaledVector(ly, v).addScaledVector(this.sunDir, w);
     this.sun.target.position.copy(center);
-    this.sun.position.copy(center).addScaledVector(SUN_DIR, 200);
+    this.sun.position.copy(center).addScaledVector(this.sunDir, 200);
     this.sun.target.updateMatrixWorld();
   }
 
   private updateChunkVisibility() {
     const far = this.fog.far + 20;
     const cp = this.camera.position;
-    for (const m of this.chunks) {
+    for (const m of this.venue.chunks) {
       const s = m.geometry.boundingSphere!;
       m.visible = cp.distanceTo(s.center) - s.radius < far;
     }

@@ -24,8 +24,10 @@ export class CameraRig {
   private kick = 0;
   private t = 0;
   private readonly euler = new Euler(0, 0, 0, "YXZ");
-  /** Optional look-around for the title screen. */
+  /** Optional look-around while standing on a roof. */
   idleSway = 0;
+  /** Where the view rests while perched: down the street before a run, up at the portals on the rooftop. */
+  perchPitch = -0.12;
 
   constructor(readonly camera: PerspectiveCamera) {}
 
@@ -57,7 +59,7 @@ export class CameraRig {
     if (s.state !== "perched") {
       targetPitch = flightPitch(s.vel.y, hs);
     } else {
-      targetPitch = -0.12 + Math.sin(this.t * 0.4) * 0.04 * this.idleSway;
+      targetPitch = this.perchPitch + Math.sin(this.t * 0.4) * 0.04 * this.idleSway;
     }
     this.pitch = damp(this.pitch, targetPitch, T.pitchFollow, dt);
 

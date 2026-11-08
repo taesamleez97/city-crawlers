@@ -29,9 +29,22 @@ async function boot() {
   const game = new Game(stage, lib, little, hud);
   hud.setLoading(1);
   hud.hideLoading();
+  // One bad frame must not stop the loop for good; each distinct error is logged once.
+  const seen = new Set<string>();
+  const errors: string[] = [];
+  (window as unknown as { __frameErrors: string[] }).__frameErrors = errors;
   const loop = () => {
-    game.frame();
     requestAnimationFrame(loop);
+    try {
+      game.frame();
+    } catch (err) {
+      const text = err instanceof Error ? (err.stack ?? err.message) : String(err);
+      if (!seen.has(text)) {
+        seen.add(text);
+        errors.push(text);
+        console.error("[frame]", err);
+      }
+    }
   };
   requestAnimationFrame(loop);
 }

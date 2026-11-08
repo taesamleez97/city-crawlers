@@ -1,13 +1,48 @@
 # City Crawlers
 
 A first-person web-swinging rhythm game for Little TV, played with your body through the
-TV camera. The hero swings through a flat-color low-poly city on a fixed route set to the
-music; you shoot each web yourself by punching an arm up and out on the beat, and lean to
-dodge girders. Three.js + Vite + TypeScript, built as a Little app (a website plus
+TV camera. The hero swings down real city streets on a fixed route set to the music; you
+shoot each web yourself by punching an arm up and out on the beat, and lean to dodge
+girders. Three.js + Vite + TypeScript, built as a Little app (a website plus
 `/little/manifest.json`).
 
-The first playable is one song and one route: Main Ave north, a right turn over the canal,
-then Tower Ave to the finish ring.
+## The rooftop
+
+The game opens on a rooftop above the procedural downtown. Portals hang on the buildings
+around you, one per city: **Seoul** (Jongno), **New York** (Midtown), **Tokyo**
+(Nishi-Shinjuku) and **Los Angeles** (Bunker Hill). One hand is up in the same web-shooter
+pose as in play. Raise an arm and the reticle follows it; punch to shoot a web at the
+portal it's on. The web zips you through, the screen whites out, and the run starts in
+that city. So the menu teaches the move the game uses.
+
+With the remote, Left and Right pick a city in the row along the bottom and OK shoots it.
+A mouse click shoots wherever the pointer is. A body shot only takes a portal once you've
+been tracked for a second and the reticle was already resting on it, so walking into frame
+doesn't pick a city by accident.
+
+## The cities
+
+Each city is built from real map data: every building on its real footprint at its real
+height, the real street network (divided roads as two carriageways), parks, water and
+rail. The route runs down real streets. Data comes from **OpenStreetMap**, packaged by
+**Overture Maps** (which merges in building heights from other open sources). It's
+rendered in the game's flat-color low-poly style, with a per-city look in
+`src/world/cities.ts`: sky and light, wall palettes, street trees (autumn-gold ginkgos in
+Seoul, green ones in Tokyo, palms in LA), traffic, signboards (stacked boards in Seoul,
+vertical neon in Tokyo), landmark dressing, and a skyline backdrop (the mountains and
+N Seoul Tower; Mt Fuji, Tokyo Tower and the Skytree; the Hollywood sign).
+
+Google Maps can't be used for this. Its terms forbid deriving geometry from map data or
+imagery, and caching or bulk-downloading it (see `docs/RESEARCH.md` §3).
+
+```bash
+python3 -m venv tools/osm/.venv && tools/osm/.venv/bin/pip install duckdb   # once
+node tools/osm/fetch.mjs [city…]   # Overture (S3) → tools/osm/cache (not committed)
+node tools/osm/build.mjs [city…]   # cache → public/cities/<id>.json (committed, ODbL)
+```
+
+Play areas, routes and landmarks are set in `tools/osm/cities.mjs`. You can check a build
+at `/tools/osm/preview.html?city=<id>` on the dev server.
 
 ## How it plays
 
@@ -29,6 +64,11 @@ A shot fires when an armed arm reaches full stretch, pointing out to the side or
 down or across the body). Pulling the arm back in re-arms it. A missed web makes the hero
 sag and slow, then a recovery web catches up within a couple of beats.
 
+Every city plays the same chart, with webs and dodges mixed together from the start. The
+pacing eases in: early cues are 8 beats apart, then 6, then 4 as the song goes on, and
+only the last few bars pair two webs 2 beats apart. Every dodge has 4 clear beats around
+it, so a shot, a dodge and another shot never come back to back.
+
 The remote never plays the game; it only drives menus (OK, Back, arrows).
 
 ### Camera guidance
@@ -36,8 +76,9 @@ The remote never plays the game; it only drives menus (OK, Back, arrows).
 - **Get Ready screen** (before every run): a live mirror of the camera with your skeleton
   drawn over it, a dashed "stand like this" outline, and the two targets where your fists
   land at full stretch. Steps: find your spot (the box turns green when both raised fists
-  fit), fists up, shoot right, shoot left, lean left, lean right. OK skips the tutorial once
-  you're tracked.
+  fit), then the first time only: shoot right, shoot left (skipping an arm you already
+  used on the rooftop), lean left, lean right. After that it's just finding your spot. OK
+  skips ahead once you're tracked.
 - **In play**: the city fills the screen and the 3D arms copy yours. A small camera view
   comes up at the bottom center only while your framing needs fixing, and hides again once
   you're back in your spot.
@@ -106,7 +147,8 @@ and pose tracking.
 |---|---|
 | `?debug` | exposes `window.game`; on-screen motion readout (rate, latency, framing, per-arm reach/straightness/angle/power, armed state, learned arm length, lean) plus the last hit offsets |
 | `?keys` | desk testing without a camera: Q/E shoot left/right webs, A/D lean |
-| `?autoplay` | a bot plays every cue perfectly (`?autoplay=miss` drops every fourth) |
+| `?autoplay` | a bot plays every cue perfectly (`?autoplay=miss` drops every fourth); goes straight to a city and never opens the camera |
+| `?city=seoul\|nyc\|tokyo\|la` | the city to aim at on the rooftop (with `?autoplay`, the city it plays) |
 | `?motionOffset=<ms>` | extra pose latency to subtract from shot times, if hits read consistently late on hardware |
 | `?accuracy=high` | ask the pose tracker for its high-accuracy mode (on the Mac: the heavy model) |
 | `?quality=low\|medium\|high\|ultra` | lock a quality tier (default: adaptive, starts at medium) |
@@ -133,19 +175,24 @@ picture is only held while a guide screen is up, so it costs nothing during play
 
 ```
 src/
-  game/      game.ts (state machine, get-ready steps, scoring, Little tools), subject.ts
+  game/      game.ts (state machine, rooftop, travel, get-ready steps, scoring, Little
+             tools), hub.ts (rooftop portals and aiming), subject.ts
   input/     motion.ts (pose → web-shoot and lean gestures, framing checks)
   rhythm/    song.ts (the chart), music.ts (synth + Conductor clock), judge.ts (timing
              windows), route.ts (rails, ring placement), dressing.ts (coins, girders, finish)
   view/      worldCues.ts (rings, girder boards and grade popups in the city), bodyGuide.ts
              (camera mirror and pip), cueStyle.ts (icons, figures), hud.ts, arms.ts (IK arms
              that copy the player), cameraRig.ts, fx.ts
-  world/     cityLayout.ts (the route), city.ts / buildings.ts (procedural blocks),
-             props.ts (GLB loading), traffic.ts, sky.ts, palette.ts
+  world/     realCity.ts (a city from map data), cities.ts (each city's look),
+             backdrop.ts (skyline ridges and towers), cityLayout.ts / city.ts /
+             buildings.ts (the procedural rooftop downtown), collision.ts, props.ts (GLB
+             loading), traffic.ts, sky.ts, palette.ts
   core/      input.ts (menus and ?keys), quality.ts, audio.ts, math.ts
   platform/  little.ts (SDK wrapper: motion, camera, tools), webcam.ts (desktop stand-in),
              little-stub.ts
 public/little/manifest.json   capabilities: sense.motion, media.camera
+public/cities/                processed map data per city (ODbL, see Credits)
+tools/osm/                    map data pipeline: cities.mjs, fetch.mjs, build.mjs, preview
 tools/blender/                headless Blender scripts (build, adapt, preview)
 tools/pipeline/               npm run assets: Blender → glTF-Transform → public/models
 assets-src/                   palette.json, third-party packs, editable .blend files
@@ -155,6 +202,12 @@ previews/                     reference renders and in-game screenshots
 
 ## Credits
 
+- Map data © OpenStreetMap contributors, Overture Maps Foundation, available under the
+  [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/). Building
+  heights and footprints also come from Microsoft ML Buildings, TomTom, USGS Lidar and
+  East Asian Buildings (Shi et al. 2023), depending on the city; each city's exact sources
+  are in its `public/cities/<id>.json` and are credited on screen during the run. Those
+  files are the processed database the ODbL asks us to publish.
 - Kenney Starter Kits (City Builder, Racing): CC0, https://kenney.nl
 - PSX First Person Arms by Drillimpact: CC0, https://drillimpact.itch.io/psx-first-person-arms-free
 - Bungee and Fredoka fonts: SIL Open Font License (`public/fonts/OFL-*.txt`)

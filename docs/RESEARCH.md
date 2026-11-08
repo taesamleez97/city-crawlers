@@ -125,6 +125,10 @@ low-poly geometry" pipeline, and Google has no games program. Use OpenStreetMap 
 Overture for streets and footprints, plus NYC Open Data for New York heights. Hand-model a
 few landmarks per city.
 
+**What shipped:** the four cities (Seoul, Tokyo, New York, Los Angeles) are built from
+Overture Maps' release, which is OpenStreetMap plus merged building heights. See "What the
+game does" at the end of this section.
+
 ### What Google's terms say
 
 The relevant documents are the
@@ -202,9 +206,38 @@ is most likely a "Produced Work", but have counsel confirm that for GLB meshes.
    landmarks are trademarked: Empire State Realty Trust licenses the Empire State Building's
    image, so license it or use "inspired-by" designs.
 
-The current game's `src/world/cityLayout.ts` is shaped so a generated layout (avenues,
-streets, blocks with heights) can replace the hand-authored one without touching the
-renderer.
+### What the game does
+
+`tools/osm` is a smaller version of the pipeline above, run once per city at authoring
+time:
+
+1. `fetch.mjs` reads a square of each city (center and radius in `cities.mjs`) from
+   Overture's GeoParquet release on S3 with DuckDB. It takes buildings and building parts
+   (with `height`, `min_height`, `num_floors`, facade color and roof shape), street and
+   rail segments, land use and water. The raw data goes to `tools/osm/cache` and isn't
+   committed.
+2. `build.mjs` projects to local meters (east-north around each city's origin). It
+   resolves heights from height, then floors × 3.3 m, then a per-type default. It
+   simplifies footprints and keeps what's within a few hundred meters of the route. It
+   chains the named streets into the route and finds each landmark by name or location.
+   Divided roads, mapped as two same-named carriageways a few meters apart, get the spacing
+   as their width plus a "which side is the other carriageway" flag. That flag gives
+   one-way traffic and keeps street trees out of the median.
+3. The output, `public/cities/<id>.json` (170–410 KB each, decimeter integers), carries its
+   own attribution and source list. The ODbL treats it as the derived database, so it's
+   published as is.
+
+At runtime `src/world/realCity.ts` extrudes the footprints and colors them from the
+city's style in `src/world/cities.ts`. It lays the streets, markings, trees, signs and
+traffic, and bakes everything into 100 m chunks. The run shows "Map data © OpenStreetMap
+contributors, Overture Maps Foundation" plus the other sources in that city's data:
+Microsoft ML Buildings, TomTom and USGS Lidar in New York and Los Angeles; Microsoft
+ML Buildings and East Asian Buildings (Shi et al. 2023) in Tokyo; East Asian Buildings in
+Seoul. Where nothing has a height (most of Seoul and Tokyo's smaller buildings), the
+per-type default applies.
+
+Not done: NYC Open Data heights, and hand-modeled landmark meshes. The landmarks are
+styled boxes and spires placed at the real building.
 
 ## 4. Little platform notes
 

@@ -173,6 +173,8 @@ export class ArmsView {
   private readonly puffs: Record<Side, Sprite>;
   /** Hand position of the web-holding arm, in arms-camera NDC (for the web line). */
   readonly handNdc = new Vector3();
+  /** Rooftop aiming: which arm is up and the camera-space direction it points. */
+  private hub: { side: Side; dir: Vector3 } | null = null;
 
   constructor(gltf: GLTF) {
     const model = gltf.scene;
@@ -235,6 +237,20 @@ export class ArmsView {
     this.gestureT = 0;
   }
 
+  /**
+   * Rooftop: one arm held out in the web-shooter pose along `dir` (camera space), the
+   * other dropped out of frame. Null hands the arms back to the run.
+   */
+  setHub(side: number | null, dir?: Vector3) {
+    if (side === null || !dir) {
+      this.hub = null;
+      return;
+    }
+    this.hub ??= { side: "R", dir: new Vector3() };
+    this.hub.side = side > 0 ? "R" : "L";
+    this.hub.dir.copy(dir);
+  }
+
   /** Mirror the player's arms (null = not seen: the arm animates on its own). */
   setBody(left: BodyArm | null, right: BodyArm | null) {
     this.body.L = left;
@@ -260,12 +276,12 @@ export class ArmsView {
    * Camera-space point the hand reaches for. Each hand stays on its own side of
    * the frame and well away from the lens, so a reaching arm never walls off the view.
    */
-  private reachTarget(dirCam: Vector3, depth: number, sx: number) {
+  private reachTarget(dirCam: Vector3, depth: number, sx: number, inner = 0.3) {
     const halfH = Math.tan(MathUtils.degToRad(ARMS_FOV / 2));
     const halfW = halfH * this.camera.aspect;
     const fwd = Math.max(0.25, -dirCam.z);
     let x = clamp(dirCam.x / fwd, -halfW * 0.72, halfW * 0.72);
-    x = sx > 0 ? Math.max(x, halfW * 0.3) : Math.min(x, -halfW * 0.3);
+    x = sx > 0 ? Math.max(x, halfW * inner) : Math.min(x, -halfW * inner);
     const y = clamp(dirCam.y / fwd, -halfH * 0.3, halfH * 0.58);
     return new Vector3(x * depth, y * depth, -depth);
   }
@@ -349,6 +365,26 @@ export class ArmsView {
         grip = 0.75;
         wrist = -0.35;
       }
+      if (this.hub) {
+        if (side === this.hub.side) {
+          // Held in the thwip pose; a shot snaps the wrist back and jolts the hand toward the eye.
+          // Kept to its own side and low, so it points the way without covering the portals.
+          const kick = clamp(1 - this.flickT[side] / 0.3, 0, 1);
+          target = this.reachTarget(this.hub.dir, 0.7 - 0.09 * kick, arm.sx, 0.5);
+          // Held low so the hand stays under the portal labels, whatever it aims at.
+          target.y = -0.19 + 0.025 * kick;
+          grip = 0;
+          open = 0;
+          thwip = 1;
+          wrist = 0.35 + 0.5 * kick;
+        } else {
+          target.set(arm.sx * 0.32, -0.62, -0.32);
+          grip = 0.4;
+          open = 0;
+          thwip = 0;
+          wrist = 0;
+        }
+      }
 
       arm.target.step(target, dt);
       arm.grip.step(grip, dt);
@@ -360,7 +396,8 @@ export class ArmsView {
     }
 
     this.root.updateMatrixWorld(true);
-    const holding = this.activeSide ? this.arms[this.activeSide] : null;
+    const holdSide = this.activeSide ?? this.hub?.side;
+    const holding = holdSide ? this.arms[holdSide] : null;
     if (holding) holding.hand.getWorldPosition(this.handNdc).project(this.camera);
     this.updatePuffs(dt);
   }

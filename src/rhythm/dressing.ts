@@ -3,7 +3,6 @@
 
 import { Group, InstancedMesh, type Material, Matrix4, Mesh, MeshBasicMaterial, Quaternion, Vector3 } from "three";
 
-import { BLIMP, FINISH } from "../world/cityLayout";
 import { MeshBuilder } from "../world/meshBuilder";
 import { rgb } from "../world/palette";
 import type { PropLibrary } from "../world/props";
@@ -12,7 +11,11 @@ import { BEAM_REACH, type Route } from "./route";
 const BEAM_LEN = 19;
 const BEAM_H = 1.7;
 const CABLE_H = 46;
+const FINISH_R = 5.6;
 const UP = new Vector3(0, 1, 0);
+
+/** A blimp drifting back and forth along a line (x0, z0) to (x1, z1) at height y. */
+export type BlimpPath = { x0: number; z0: number; x1: number; z1: number; y: number; speed: number };
 
 type BeamRt = { pivot: Group; angle: number; vel: number };
 type CoinRt = { pos: Vector3; beam: number; taken: boolean; anim: number };
@@ -41,8 +44,9 @@ export class Dressing {
   private readonly coins: CoinRt[];
   private readonly coinMesh: InstancedMesh;
   private readonly finishMesh: Mesh;
-  private readonly blimp: Mesh;
-  private blimpX: number = BLIMP.x0;
+  private readonly blimp: Mesh | null = null;
+  /** Share of the way along the blimp's path. */
+  private blimpU = 0;
   private blimpDir = 1;
   private blimpYaw = 0;
   private finishPop = 0;
@@ -52,7 +56,7 @@ export class Dressing {
   private readonly s = new Vector3();
   private readonly p = new Vector3();
 
-  constructor(lib: PropLibrary, material: Material, route: Route) {
+  constructor(lib: PropLibrary, material: Material, route: Route, private readonly blimpPath?: BlimpPath) {
     const girder = girderGeometry();
     for (const beam of route.beams) {
       const side = beam.cue.side;
@@ -76,14 +80,16 @@ export class Dressing {
     this.group.add(this.coinMesh);
 
     this.finishMesh = new Mesh(lib.get("hoop_gold"), glow);
-    this.finishMesh.position.set(FINISH.x, FINISH.y, FINISH.z);
-    this.finishMesh.rotation.y = FINISH.yaw;
-    this.finishMesh.scale.setScalar(FINISH.r);
+    this.finishMesh.position.copy(route.finish);
+    this.finishMesh.rotation.y = Math.atan2(route.finishDir.x, route.finishDir.z);
+    this.finishMesh.scale.setScalar(FINISH_R);
     this.group.add(this.finishMesh);
 
-    this.blimp = new Mesh(lib.get("blimp"), material);
-    this.blimp.castShadow = true;
-    this.group.add(this.blimp);
+    if (blimpPath) {
+      this.blimp = new Mesh(lib.get("blimp"), material);
+      this.blimp.castShadow = true;
+      this.group.add(this.blimp);
+    }
     this.reset();
   }
 
@@ -148,13 +154,18 @@ export class Dressing {
 
     this.finishPop = Math.max(0, this.finishPop - dt * 1.5);
     this.finishMesh.rotation.z = this.t * 0.4;
-    this.finishMesh.scale.setScalar(FINISH.r * (1 + Math.sin(this.t * 5) * 0.04 + this.finishPop * 0.5));
+    this.finishMesh.scale.setScalar(FINISH_R * (1 + Math.sin(this.t * 5) * 0.04 + this.finishPop * 0.5));
 
-    this.blimpX += this.blimpDir * BLIMP.speed * dt;
-    if (this.blimpX > BLIMP.x1) this.blimpDir = -1;
-    if (this.blimpX < BLIMP.x0) this.blimpDir = 1;
-    this.blimpYaw += ((this.blimpDir > 0 ? 0 : Math.PI) - this.blimpYaw) * (1 - Math.exp(-1.2 * dt));
-    this.blimp.position.set(this.blimpX, BLIMP.y + Math.sin(this.t * 0.7) * 0.8, BLIMP.z);
+    const b = this.blimpPath;
+    if (!b || !this.blimp) return;
+    const len = Math.hypot(b.x1 - b.x0, b.z1 - b.z0);
+    this.blimpU += (this.blimpDir * b.speed * dt) / len;
+    if (this.blimpU > 1) this.blimpDir = -1;
+    if (this.blimpU < 0) this.blimpDir = 1;
+    // The model's nose points along +x.
+    const heading = Math.atan2(-(b.z1 - b.z0), b.x1 - b.x0) + (this.blimpDir > 0 ? 0 : Math.PI);
+    this.blimpYaw += Math.atan2(Math.sin(heading - this.blimpYaw), Math.cos(heading - this.blimpYaw)) * (1 - Math.exp(-1.2 * dt));
+    this.blimp.position.set(b.x0 + (b.x1 - b.x0) * this.blimpU, b.y + Math.sin(this.t * 0.7) * 0.8, b.z0 + (b.z1 - b.z0) * this.blimpU);
     this.blimp.rotation.set(0, this.blimpYaw, Math.sin(this.t * 0.5) * 0.03);
   }
 }

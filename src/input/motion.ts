@@ -50,8 +50,8 @@ const NEED_MAX = 0.8;
 /** …with the elbow opened past a right angle (shoulder→wrist over shoulder→elbow→wrist)… */
 const SHOOT_STRAIGHT = 0.7;
 /** …pointing between a little below straight out and a little past straight up (radians). */
-const AIM_MIN = -0.5;
-const AIM_MAX = 2.0;
+export const AIM_MIN = -0.5;
+export const AIM_MAX = 2.0;
 /** The arm must come back in (pulled close, or bent) before it can shoot again. */
 const REARM_OF_NEED = 0.75;
 const REARM_STRAIGHT = 0.55;
@@ -62,7 +62,7 @@ const FRAME_ANGLE = Math.PI / 4;
 /** Recent segment lengths kept for the arm-length estimate (about ten seconds). */
 const ARM_SAMPLES = 300;
 /** The viewer sees their own shoulder about here from the hero's eye: radians toward the arm's side, and up. */
-const EYE_SHOULDER = { yaw: 0.1, el: -0.4 };
+export const EYE_SHOULDER = { yaw: 0.1, el: -0.4 };
 const LEAN_ON = 0.16;
 const LEAN_OFF = 0.08;
 const LOST_AFTER_MS = 700;

@@ -5,3 +5,5 @@ assets-build/
 __pycache__/
 .DS_Store
 .env
+tools/osm/cache/
+tools/osm/.venv/

@@ -1,41 +1,46 @@
 {
   "id": "city-crawlers",
   "title": "City Crawlers",
-  "description": "A first-person web-swinging rhythm game played with your body through the TV camera: punch your arms up and out to shoot webs on the beat, lean to dodge. Launch when the viewer wants an active game, to move or exercise, to swing through a city like a superhero, or to play something quick to music.",
+  "description": "A first-person web-swinging rhythm game played with your body through the TV camera, through Seoul, Tokyo, New York and Los Angeles built from real map data: punch your arms up and out to shoot webs on the beat, lean to dodge. Launch when the viewer wants an active game, to move or exercise, to swing through a city like a superhero, or to play something quick to music.",
   "url": "http://127.0.0.1:7140",
   "launchSchema": {
     "type": "object",
-    "description": "Omit every field for the normal title screen.",
+    "description": "Omit every field to start on the rooftop city select.",
     "properties": {
+      "city": {
+        "type": "string",
+        "enum": ["seoul", "nyc", "tokyo", "la"],
+        "description": "Which city to aim at on the rooftop (seoul Seoul, nyc New York, tokyo Tokyo, la Los Angeles), only when the viewer names one."
+      },
       "start": {
         "type": "boolean",
-        "description": "true to skip the title screen and begin a run immediately, e.g. when the viewer says 'start a run' or 'let's play'."
-      },
-      "level": {
-        "type": "integer",
-        "minimum": 1,
-        "maximum": 3,
-        "description": "Which level to select (1 Web Shooter, 2 Dodge, 3 Full Crawl), only when the viewer names one. Locked levels are ignored; omit for the next level they haven't cleared."
+        "description": "true to shoot the aimed portal right away and begin a run, e.g. when the viewer says 'let's play' or 'take me to Tokyo'."
       }
     },
     "additionalProperties": false
   },
-  "guide": "You are the game's announcer. The game is played with the body, not the remote. The hero swings through the city on a fixed route to the music. There are three levels that teach one move at a time: 1 Web Shooter (webs only), 2 Dodge (the hero fires its own webs and the viewer only leans), and 3 Full Crawl (both together, mixed in gradually). Each level unlocks when the one before it is finished with at least 60% accuracy; the title menu says which are locked. The cues are in the city itself. A ring on a building ahead means shoot a web with that arm, blue for left and pink for right: fists up by the shoulders, then punch that arm up and out toward the ring when its outer circle closes and locks onto it. The ring then holds for a moment while a colored disc drains, and the web still counts until the disc is empty. The punch only has to reach the target dot in the camera view; a locked elbow isn't needed. A shot that doesn't hit flashes at the wrist and says EARLY or OTHER ARM over the ring. A girder swinging into the street with orange chevrons means lean the body the way the chevrons point to dodge it, when they flash. Before a run, the Get Ready screen shows the camera picture: the viewer finds their spot (stand back until the box turns green, with room for raised fists), then tries that level's moves. If the camera loses them, the game pauses and shows the picture until they step back into view. Coach with the Camera view readout (it says what to fix: step back, move left or right, show both hands). Read the Run status readouts (score, combo, accuracy) when asked how they are doing, and the Grade, Stars and Note on the results screen. Back pauses. Only pause, resume, restart or quit when the viewer asks. Never start a new run over one in progress unless the viewer asks to restart.",
+  "guide": "You are the game's announcer. The game is played with the body, not the remote. It starts on a rooftop with portals on the buildings around it, one per city: Seoul, New York, Tokyo and Los Angeles. The viewer raises an arm to aim (a reticle follows the hand) and punches to shoot a web at a portal, the same move they use in the game; with the remote they can also pick a city along the bottom and press OK. The Rooftop prompt readout says what to do next. Each city is built from real OpenStreetMap data, and the hero swings down real streets to the music: Jongno in Seoul, Midtown Manhattan in New York, Nishi-Shinjuku in Tokyo, Bunker Hill in Los Angeles. Every city plays the same mix of webs and dodges, spaced out at first with long breathers, and getting busier as the song goes on. The cues are in the city itself. A ring on a building ahead means shoot a web with that arm, blue for left and pink for right: fists up by the shoulders, then punch that arm up and out toward the ring when its outer circle closes and locks onto it. The ring then holds for a moment while a colored disc drains, and the web still counts until the disc is empty. The punch only has to reach the target dot in the camera view; a locked elbow isn't needed. A shot that doesn't hit flashes at the wrist and says EARLY or OTHER ARM over the ring. A girder swinging into the street with orange chevrons means lean the body the way the chevrons point to dodge it, when they flash. Before a run, the Get Ready screen shows the camera picture: the viewer finds their spot (stand back until the box turns green, with room for raised fists), then tries each move once the first time they play. If the camera loses them, the game pauses and shows the picture until they step back into view. Coach with the Camera view readout (it says what to fix: step back, move left or right, show both hands). Read the Run status readouts (street, score, combo) when asked how they are doing, and the Grade, Stars and Note on the results screen. Back pauses; the pause and results menus can return to the rooftop to pick another city. Only pause, resume, restart, change city or quit when the viewer asks. Never start a new run over one in progress unless the viewer asks to restart.",
   "capabilities": [
-    { "name": "sense.motion", "reason": "Play with your body: punch up and out to shoot webs, lean to dodge, in time with the music." },
+    { "name": "sense.motion", "reason": "Play with your body: aim and punch to shoot webs, lean to dodge, in time with the music." },
     { "name": "media.camera", "reason": "Show you the camera picture while you get set up, so you can see where to stand and where your fists go." }
   ],
   "tools": [
     {
       "name": "start_run",
-      "description": "Start a new run from the title or results screen. Without a level it plays the selected one (the next uncleared level, or the one just played).",
+      "description": "Go to a city and start a run there: from the rooftop the hero shoots that city's portal; from the results screen it travels straight there. Without a city it plays the one aimed at or just played.",
       "authority": "read",
       "params": {
         "type": "object",
         "properties": {
-          "level": { "type": "integer", "minimum": 1, "maximum": 3, "description": "1 Web Shooter, 2 Dodge or 3 Full Crawl. Only when the viewer names a level; locked levels are refused." }
+          "city": { "type": "string", "enum": ["seoul", "nyc", "tokyo", "la"], "description": "seoul Seoul, nyc New York, tokyo Tokyo or la Los Angeles. Only when the viewer names a city." }
         }
       }
+    },
+    {
+      "name": "go_rooftop",
+      "description": "Leave the current city (ending any run) and go back to the rooftop to pick another. Only when the viewer asks to change city or go back.",
+      "authority": "mutate",
+      "params": { "type": "object", "properties": {} }
     },
     {
       "name": "pause_game",
@@ -51,13 +56,13 @@
     },
     {
       "name": "restart_run",
-      "description": "Throw away the current run and start over from the beginning. Only when the viewer asks to restart.",
+      "description": "Throw away the current run and start over in the same city. Only when the viewer asks to restart.",
       "authority": "mutate",
       "params": { "type": "object", "properties": {} }
     },
     {
       "name": "quit_game",
-      "description": "Leave City Crawlers (or return to the title from the results screen).",
+      "description": "Leave City Crawlers.",
       "authority": "read",
       "params": { "type": "object", "properties": {} }
     }

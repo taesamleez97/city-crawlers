@@ -13,31 +13,25 @@ export class Sky {
   readonly group = new Group();
   private readonly dome: Mesh;
   private readonly clouds: Mesh;
+  /** Downtown's bay and seawall foam; the map cities bring their own ground. */
+  private readonly shore = new Group();
   private t = 0;
 
   constructor() {
     const geo = new SphereGeometry(1400, 24, 12);
-    const top = pal("sky_top"), horizon = pal("sky_horizon");
-    const pos = geo.getAttribute("position");
-    const colors = new Float32Array(pos.count * 3);
-    const c = new Color();
-    for (let i = 0; i < pos.count; i++) {
-      const y = pos.getY(i) / 1400;
-      const t = Math.pow(Math.max(0, y), 0.55);
-      c.copy(horizon).lerp(top, t);
-      colors.set([c.r, c.g, c.b], i * 3);
-    }
-    geo.setAttribute("color", new BufferAttribute(colors, 3));
+    geo.setAttribute("color", new BufferAttribute(new Float32Array(geo.getAttribute("position").count * 3), 3));
     this.dome = new Mesh(geo, new MeshBasicMaterial({ vertexColors: true, side: BackSide, fog: false, depthWrite: false }));
     this.dome.renderOrder = -10;
     this.dome.frustumCulled = false;
     this.group.add(this.dome);
+    this.setColors(pal("sky_top"), pal("sky_horizon"));
 
     const water = new Mesh(new PlaneGeometry(6000, 6000), new MeshLambertMaterial({ color: pal("water") }));
     water.rotation.x = -Math.PI / 2;
     water.position.y = -2.1;
     water.receiveShadow = true;
-    this.group.add(water);
+    this.shore.add(water);
+    this.group.add(this.shore);
 
     // Foam ring hugging the seawall: a classic Crossy Road shoreline beat.
     const foam = new MeshBuilder();
@@ -48,11 +42,27 @@ export class Sky {
     foam.flat(BOUNDS.x0 - m, BOUNDS.z0, BOUNDS.x0, BOUNDS.z1, -2.05, fc);
     foam.flat(BOUNDS.x1, BOUNDS.z0, BOUNDS.x1 + m, BOUNDS.z1, -2.05, fc);
     const foamMesh = new Mesh(foam.build(), new MeshBasicMaterial({ vertexColors: true }));
-    this.group.add(foamMesh);
+    this.shore.add(foamMesh);
 
     this.clouds = new Mesh(buildClouds(mulberry32(42)), new MeshBasicMaterial({ vertexColors: true, fog: false }));
     this.clouds.frustumCulled = false;
     this.group.add(this.clouds);
+  }
+
+  setColors(top: Color, horizon: Color) {
+    const attr = this.dome.geometry.getAttribute("position");
+    const colors = this.dome.geometry.getAttribute("color") as BufferAttribute;
+    const c = new Color();
+    for (let i = 0; i < attr.count; i++) {
+      const t = Math.pow(Math.max(0, attr.getY(i) / 1400), 0.55);
+      c.copy(horizon).lerp(top, t);
+      colors.setXYZ(i, c.r, c.g, c.b);
+    }
+    colors.needsUpdate = true;
+  }
+
+  set shoreVisible(v: boolean) {
+    this.shore.visible = v;
   }
 
   update(dt: number, camPos: Vector3) {
