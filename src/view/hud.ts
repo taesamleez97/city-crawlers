@@ -298,17 +298,19 @@ export class Hud {
     this.menuOpen = false;
   }
 
-  /** The rooftop: the city stays in view, with a prompt up top and the cities as buttons along the bottom. */
+  /** The rooftop: the city stays in view, with the title up top and what to do along the bottom. */
   showHub(items: MenuItem[], focus: number, note: string) {
     this.open(
       `<div class="hub">
         ${logoSvg("logo-art hub-logo")}
         <div class="hub-head">
           <div class="hub-title">Choose your city</div>
-          <div class="hub-prompt" data-little="readout" data-little-label="Rooftop prompt"></div>
         </div>
         <div class="menu-slot hub-cities"></div>
-        <div class="hub-note">${note}</div>
+        <div class="hub-foot">
+          <div class="hub-prompt" data-little="readout" data-little-label="Rooftop prompt"></div>
+          <div class="hub-note">${note}</div>
+        </div>
       </div>`,
       "City select",
       items,

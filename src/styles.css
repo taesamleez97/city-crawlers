@@ -751,8 +751,19 @@ kbd {
   -webkit-text-stroke: 13px var(--ink);
   text-shadow: 0 8px 0 var(--ink);
 }
+/* Along the bottom, over the darkened ledge: what to do, then the map credit. */
+.hub-foot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--little-safe-bottom) + 20px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  animation: panelin 0.5s ease-out both;
+}
 .hub-prompt {
-  margin-top: 6px;
   padding: 10px 32px;
   border-radius: 999px;
   background: var(--ink-soft);
@@ -775,10 +786,6 @@ kbd {
   white-space: nowrap;
 }
 .hub-note {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(var(--little-safe-bottom) + 22px);
   text-align: center;
   font-size: 19px;
   font-weight: 600;
