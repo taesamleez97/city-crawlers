@@ -26,6 +26,9 @@ export type GuidePanel = {
   data?: Record<string, unknown>;
 };
 
+/** Under the menus between runs: the body can press OK too. */
+const MENU_HINT = `<div class="menu-hint"><kbd>OK</kbd> or punch both arms</div>`;
+
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, html?: string) => {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -314,7 +317,11 @@ export class Hud {
   }
 
   showPause(items: MenuItem[], note = "") {
-    this.open(`<div class="panel"><h2>PAUSED</h2>${note ? `<div class="note">${note}</div>` : ""}<div class="menu-slot"></div></div>`, "Pause menu", items);
+    this.open(
+      `<div class="panel"><h2>PAUSED</h2>${note ? `<div class="note">${note}</div>` : ""}<div class="menu-slot"></div>${MENU_HINT}</div>`,
+      "Pause menu",
+      items,
+    );
   }
 
   showResults(r: Results, items: MenuItem[]) {
@@ -334,6 +341,7 @@ export class Hud {
         <div class="rows">${rows}</div>
         ${r.note ? `<div class="note" data-little="readout" data-little-label="Note">${r.note}</div>` : ""}
         <div class="menu-slot"></div>
+        ${MENU_HINT}
       </div>`,
       "Results",
       items,

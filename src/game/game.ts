@@ -8,7 +8,7 @@ import { Sfx } from "../core/audio";
 import { type Action, Input } from "../core/input";
 import { SpringScalar, clamp, damp } from "../core/math";
 import { QualityManager, type Tier } from "../core/quality";
-import { DEFAULT_AIM, MotionInput, aimToward } from "../input/motion";
+import { DEFAULT_AIM, type MotionEvent, MotionInput, aimToward } from "../input/motion";
 import type { CameraFeed, LittlePlatform } from "../platform/little";
 import { Dressing } from "../rhythm/dressing";
 import { type CueRt, HAND_HOLD, Judge, type Judgment } from "../rhythm/judge";
@@ -61,6 +61,8 @@ const MOUSE_AIM_HOLD = 4;
 const HUB_SETTLE = 1;
 /** …and only at a portal the arm had the reticle on this recently (seconds). */
 const AIMED_WITHIN = 0.6;
+/** Both arms shooting this close together is OK on the ready screen and the menus between runs (seconds). */
+const BOTH_ARMS_WITHIN = 0.35;
 /** Through a portal: the web flies, the zip, the white-out, then the city (seconds). */
 const WARP_ZIP_AT = 0.18;
 const WARP_ZIP_FOR = 0.95;
@@ -188,6 +190,10 @@ export class Game {
   /** Arms that have shot a web this session: the tutorial skips them. */
   private readonly armsShown = new Set<Side>();
   private tutorialDone = false;
+  /** When each arm last shot outside the song (performance.now()), to catch both at once. */
+  private readonly lastShot: Record<Side, number> = { [-1]: -1e9, [1]: -1e9 };
+  /** Both-arms OK on a menu only after this (performance.now()), so a celebration at the finish doesn't restart. */
+  private menuGestureAfter = 0;
   private warp: { portal: number; side: Side; from: Vector3; data: CityFile | null; failed: boolean; white: boolean } | null = null;
   private travelToken = 0;
   /** motion: the camera (the game). keys: ?keys desk testing. auto: ?autoplay. */
@@ -867,7 +873,7 @@ export class Game {
     this.hud.showGuide({
       title: `${this.city.name.toUpperCase()} · ${this.city.area.toUpperCase()}`,
       side: `${now}<ol class="steps">${list}</ol>`,
-      footer: `<kbd>OK</kbd> ${this.steps.length > 1 ? "skip the tutorial" : "start"} &nbsp; <kbd>BACK</kbd> rooftop`,
+      footer: `<kbd>OK</kbd> or punch both arms: ${this.steps.length > 1 ? "skip the tutorial" : "start"} &nbsp; <kbd>BACK</kbd> rooftop`,
       data: { steps: this.steps.map((s) => ({ step: s.label.replace(/<[^>]+>/g, ""), done: s.done })) },
     });
   }
@@ -883,6 +889,15 @@ export class Game {
     }
     if (view === "blocked" || this.readyStep >= this.steps.length) {
       if (this.readyDoneAt >= 0 && this.stateT - this.readyDoneAt > 0.9) this.beginPlay();
+      return;
+    }
+    if (events.some((e) => this.bothArms(e))) {
+      this.sfx.thwip();
+      for (const side of [-1, 1] as const) {
+        this.arms.puff(side);
+        this.arms.flick(side);
+      }
+      this.readyOk();
       return;
     }
     const id = this.steps[this.readyStep].id;
@@ -915,6 +930,15 @@ export class Game {
       this.tutorialDone = true;
     }
     this.renderReady();
+  }
+
+  /** True when this shot and one from the other arm land together: the body's OK. */
+  private bothArms(e: MotionEvent): boolean {
+    if (e.type !== "shoot") return false;
+    this.lastShot[e.side] = e.t;
+    if (Math.abs(e.t - this.lastShot[e.side === 1 ? -1 : 1]) > BOTH_ARMS_WITHIN * 1000) return false;
+    this.lastShot[-1] = this.lastShot[1] = -1e9;
+    return true;
   }
 
   /** A shot outside the song (tutorial): the sound and the 3D arm, no web. */
@@ -978,6 +1002,7 @@ export class Game {
   private showPauseMenu() {
     this.hud.hideGuide();
     this.closeCamera();
+    this.menuGestureAfter = performance.now() + 600;
     this.hud.showPause([
       { id: "resume", label: "Resume", action: "resume_game", onSelect: () => this.resume() },
       { id: "restart", label: "Restart", action: "restart_run", onSelect: () => this.startRun() },
@@ -1085,7 +1110,8 @@ export class Game {
     this.setPip(false);
     this.hud.setHint(null);
     this.hud.setPrompt(null);
-    this.motion.close();
+    // The camera keeps watching: both arms at once is OK on the results menu.
+    this.menuGestureAfter = performance.now() + 1500;
     const n = (v: number) => v.toLocaleString("en-US");
     const rows: Array<[string, string]> = [
       ["Accuracy", `${(acc * 100).toFixed(1)}%`],
@@ -1134,8 +1160,15 @@ export class Game {
       return;
     }
     if (this.state !== "play") {
-      // Gestures between runs are not inputs (the ready screen reads its own).
-      if (this.state !== "ready") this.motion.drain();
+      // Between runs the only gesture is both arms at once, as OK on a menu (the ready screen reads its own).
+      if (this.state !== "ready") {
+        const ok = this.motion.drain().some((e) => this.bothArms(e));
+        const menu = this.hud.menuOpen && (this.state === "results" || this.state === "paused");
+        if (ok && menu && performance.now() > this.menuGestureAfter) {
+          this.sfx.ui("select");
+          this.hud.menu.activate();
+        }
+      }
       return;
     }
     if (this.mode === "keys") for (const p of presses) this.onPress(p.kind, p.side, p.time);

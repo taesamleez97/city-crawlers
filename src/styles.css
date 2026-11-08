@@ -597,6 +597,11 @@ kbd {
   flex-direction: row;
   min-width: 0;
 }
+.menu-hint {
+  font-size: 28px;
+  font-weight: 600;
+  opacity: 0.8;
+}
 .result-head {
   display: flex;
   align-items: center;
