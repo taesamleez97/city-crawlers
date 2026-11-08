@@ -2,6 +2,7 @@
 // and data-little-* annotations so the Little agent can read and drive it.
 
 import { BodyGuide } from "./bodyGuide";
+import { logoSvg } from "./logo";
 
 export type MenuItem = {
   id: string;
@@ -143,7 +144,7 @@ export class Hud {
     this.overlay = el("div", "overlay hidden");
     this.flashEl = el("div", "flash");
     this.fadeEl = el("div", "fade");
-    this.loading = el("div", "loading", `<div class="logo"><span>CITY</span><span class="l2">CRAWLERS</span></div><div class="load-bar"><i></i></div>`);
+    this.loading = el("div", "loading", `${logoSvg()}<div class="load-bar"><i></i></div>`);
     this.debugEl = el("pre", "motion-debug hidden");
     this.reticle = el("div", "reticle hidden", "<i></i>");
     this.credit = el("div", "credit hidden");
@@ -301,8 +302,8 @@ export class Hud {
   showHub(items: MenuItem[], focus: number, note: string) {
     this.open(
       `<div class="hub">
+        ${logoSvg("logo-art hub-logo")}
         <div class="hub-head">
-          <div class="logo"><span>CITY</span><span class="l2">CRAWLERS</span></div>
           <div class="hub-title">Choose your city</div>
           <div class="hub-prompt" data-little="readout" data-little-label="Rooftop prompt"></div>
         </div>

@@ -78,7 +78,6 @@ body {
 }
 
 /* Outlined display type: white fill, thick ink stroke, hard drop shadow. */
-.logo,
 .score,
 .center-text,
 .callout,
@@ -499,22 +498,11 @@ kbd {
   background: rgba(16, 20, 44, 0.55);
   pointer-events: auto;
 }
-.logo {
-  font-size: 92px;
-  line-height: 0.95;
-  color: #fff;
-}
-.logo.big {
-  font-size: 112px;
-  -webkit-text-stroke-width: 15px;
-  text-shadow: 0 12px 0 var(--ink);
-  color: var(--gold);
-}
-.logo span {
+/* The logo art (src/view/logo.ts): sized by width, its height follows. */
+.logo-art {
   display: block;
-}
-.logo .l2 {
-  color: #fff;
+  height: auto;
+  overflow: visible;
 }
 .menu {
   display: flex;
@@ -685,10 +673,8 @@ kbd {
 .loading.gone {
   opacity: 0;
 }
-.loading .logo {
-  font-size: 140px;
-  text-align: center;
-  color: var(--gold);
+.loading .logo-art {
+  width: 1180px;
 }
 .load-bar {
   width: 640px;
@@ -748,13 +734,14 @@ kbd {
   gap: 6px;
   animation: panelin 0.5s ease-out both;
 }
-.hub-head .logo {
-  display: flex;
-  gap: 20px;
-  font-size: 46px;
-  -webkit-text-stroke-width: 9px;
-  text-shadow: 0 6px 0 var(--ink);
-  color: var(--gold);
+/* Up in the corner, clear of the portals and the title. */
+.hub-logo {
+  position: absolute;
+  left: calc(var(--little-safe-left) + 40px);
+  top: calc(var(--little-safe-top) + 40px);
+  width: 340px;
+  filter: drop-shadow(0 6px 10px rgba(13, 18, 38, 0.35));
+  animation: panelin 0.5s ease-out both;
 }
 .hub-title {
   font-family: "Bungee", "Fredoka", sans-serif;
